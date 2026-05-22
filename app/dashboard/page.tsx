@@ -128,6 +128,14 @@ export default function DashboardPage() {
               Audit Log
             </button>
           )}
+          {role === 'ADMIN' && (
+            <button
+              onClick={() => router.push('/manage-users')}
+              className="text-sm text-zinc-400 hover:text-white transition-colors"
+            >
+             Manage Users
+            </button>
+          )}
           <button
             onClick={handleLogout}
             className="text-sm text-zinc-400 hover:text-red-400 transition-colors"

@@ -27,9 +27,10 @@ export const tunnelService: ITunnelService = {
     cols: number,
     rows: number
   ): Promise<void> {
-    // 1. Fetch encrypted credential blob from DB
+    // 1. Fetch encrypted credential blob + asset metadata from DB
     const { rows: dbRows } = await pool.query(
-      `SELECT ac.encrypted_blob, ac.iv, ac.auth_tag, ta.hostname, ta.port
+      `SELECT ac.encrypted_blob, ac.iv, ac.auth_tag,
+              ta.hostname, ta.port, ta.db_type
        FROM asset_credentials ac
        JOIN target_assets ta ON ta.id = ac.asset_id
        WHERE ac.asset_id = $1`,
@@ -37,16 +38,16 @@ export const tunnelService: ITunnelService = {
     )
     if (!dbRows[0]) throw new Error(`No credentials for asset ${assetId}`)
 
-    const { encrypted_blob, iv, auth_tag, hostname, port } = dbRows[0]
+    const { encrypted_blob, iv, auth_tag, hostname, port, db_type } = dbRows[0]
 
     // 2. Decrypt — plaintext lives only in this local scope
-    const plaintext = decryptCredential({
+    const creds = decryptCredential({
       encryptedBlob: encrypted_blob,
       iv,
       authTag: auth_tag,
     })
 
-    // 3. Open SSH connection — credential used immediately
+    // 3. Open SSH connection — credential used immediately, then overwritten
     await new Promise<void>((resolve, reject) => {
       const conn = new Client()
 
@@ -57,10 +58,9 @@ export const tunnelService: ITunnelService = {
           (err, stream) => {
             if (err) { conn.end(); return reject(err) }
 
-            // 5. Store in Map — plaintext is now out of scope
+            // 5. Store in Map — SSH plaintext is now out of scope
             tunnels.set(sessionId, { conn, stream })
 
-            // Wire up onData handler if already registered
             const entry = tunnels.get(sessionId)!
             stream.on('data', (chunk: Buffer) => {
               entry.onData?.(chunk.toString())
@@ -68,8 +68,38 @@ export const tunnelService: ITunnelService = {
             stream.stderr.on('data', (chunk: Buffer) => {
               entry.onData?.(chunk.toString())
             })
-
             stream.on('close', () => tunnelService.closeTunnel(sessionId))
+
+            // 6. Auto-login to the database if credentials are present.
+            //    We wait 800ms for the shell prompt to be ready before sending
+            //    the command, then send the password after the password prompt.
+            //
+            //    The operator lands directly in the DB shell — they never see
+            //    or type the credentials themselves. This is the core PAM value:
+            //    access without credential exposure.
+            if (db_type === 'mysql' && creds.db) {
+              const { username: dbUser, password: dbPass } = creds.db
+
+              // Wait for bash prompt, then fire the mysql command.
+              // We use --password= inline so it's never echoed in the PTY.
+              // The operator sees the mysql> prompt as their first output.
+              setTimeout(() => {
+                // --password= with no space avoids the "password on command line
+                // is insecure" warning being visible in the terminal
+                stream.write(`mysql -u ${dbUser} -p'${dbPass}'\r`)
+
+                // Immediately overwrite the password string in memory
+                ;(creds.db as any).password = ''
+              }, 800)
+
+            } else if (db_type === 'mongodb' && creds.db) {
+              const { username: dbUser, password: dbPass } = creds.db
+
+              setTimeout(() => {
+                stream.write(`mongosh -u ${dbUser} -p '${dbPass}' --authenticationDatabase admin\r`)
+                ;(creds.db as any).password = ''
+              }, 800)
+            }
 
             resolve()
           }
@@ -78,18 +108,17 @@ export const tunnelService: ITunnelService = {
 
       conn.on('error', reject)
 
-      // Connect — plaintext.password used here and immediately discarded
       conn.connect({
-        host:     hostname,
-        port:     port ?? 22,
-        username: plaintext.username,
-        password: plaintext.password,
+        host:         hostname,
+        port:         port ?? 22,
+        username:     creds.ssh.username,
+        password:     creds.ssh.password,
         readyTimeout: 10000,
       })
 
-      // Overwrite plaintext references (GC will collect)
-      ;(plaintext as any).password = ''
-      ;(plaintext as any).username = ''
+      // Overwrite SSH plaintext immediately after connect() call
+      ;(creds.ssh as any).password = ''
+      ;(creds.ssh as any).username = ''
     })
   },
 

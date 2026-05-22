@@ -9,11 +9,21 @@ const pool = new Pool({
 })
 
 async function seedVault() {
-  // These are the SSH credentials for pamuser on Laptop 1
+  // Store BOTH SSH credentials and DB credentials in the same encrypted blob.
+  // The PAM uses ssh.username/ssh.password to connect to the machine,
+  // then uses db.username/db.password to auto-login to MySQL — the operator
+  // never sees or types either set of credentials.
   const creds = {
-    username: 'pamuser',
-    password: '1234Admin'
+    ssh: {
+      username: 'pamuser',
+      password: '1234Admin',
+    },
+    db: {
+      username: 'root',
+      password: 'your_mysql_root_password', // ← change to real MySQL password
+    },
   }
+
   const blob = encryptCredential(creds)
 
   await pool.query(
@@ -26,6 +36,7 @@ async function seedVault() {
            auth_tag       = EXCLUDED.auth_tag`,
     ['00000000-0000-0000-0000-000000000001', blob.encryptedBlob, blob.iv, blob.authTag]
   )
+
   console.log('Vault seeded successfully')
   console.log('Blob length:', blob.encryptedBlob.length, 'bytes')
   await pool.end()
