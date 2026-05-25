@@ -7,9 +7,11 @@ interface TunnelEntry {
   conn:    Client
   stream:  ClientChannel
   onData?: (data: string) => void
+  ready:   boolean
+  buffer:  string[]
+  commandSent: boolean
 }
 
-// Active SSH sessions — Map<sessionId → TunnelEntry>
 const tunnels = new Map<string, TunnelEntry>()
 
 const pool = new Pool({
@@ -19,6 +21,13 @@ const pool = new Pool({
   password: process.env.GUARDIAN_DB_PASS,
 })
 
+const DB_READY_PATTERNS: Record<string, RegExp> = {
+  mysql:   /mysql>\s*$/m,
+  mongodb: />\s*$/m,
+}
+
+const CLEAR_SCREEN = '\x1b[2J\x1b[H'
+
 export const tunnelService: ITunnelService = {
 
   async openTunnel(
@@ -27,7 +36,6 @@ export const tunnelService: ITunnelService = {
     cols: number,
     rows: number
   ): Promise<void> {
-    // 1. Fetch encrypted credential blob + asset metadata from DB
     const { rows: dbRows } = await pool.query(
       `SELECT ac.encrypted_blob, ac.iv, ac.auth_tag,
               ta.hostname, ta.port, ta.db_type
@@ -40,66 +48,102 @@ export const tunnelService: ITunnelService = {
 
     const { encrypted_blob, iv, auth_tag, hostname, port, db_type } = dbRows[0]
 
-    // 2. Decrypt — plaintext lives only in this local scope
     const creds = decryptCredential({
       encryptedBlob: encrypted_blob,
       iv,
       authTag: auth_tag,
     })
 
-    // 3. Open SSH connection — credential used immediately, then overwritten
+    const readyPattern = DB_READY_PATTERNS[db_type] ?? null
+
+    // Build connect config — prefer privateKey over password
+    const connectConfig: any = {
+      host:         hostname,
+      port:         port ?? 22,
+      username:     creds.ssh.username,
+      readyTimeout: 10000,
+    }
+    if (creds.ssh.privateKey) {
+      connectConfig.privateKey = creds.ssh.privateKey
+    } else {
+      connectConfig.password = creds.ssh.password
+    }
+
     await new Promise<void>((resolve, reject) => {
       const conn = new Client()
 
       conn.on('ready', () => {
-        // 4. Request PTY shell with correct dimensions
         conn.shell(
           { term: 'xterm-256color', cols, rows },
           (err, stream) => {
             if (err) { conn.end(); return reject(err) }
 
-            // 5. Store in Map — SSH plaintext is now out of scope
-            tunnels.set(sessionId, { conn, stream })
-
-            const entry = tunnels.get(sessionId)!
-            stream.on('data', (chunk: Buffer) => {
-              entry.onData?.(chunk.toString())
-            })
-            stream.stderr.on('data', (chunk: Buffer) => {
-              entry.onData?.(chunk.toString())
-            })
-            stream.on('close', () => tunnelService.closeTunnel(sessionId))
-
-            // 6. Auto-login to the database if credentials are present.
-            //    We wait 800ms for the shell prompt to be ready before sending
-            //    the command, then send the password after the password prompt.
-            //
-            //    The operator lands directly in the DB shell — they never see
-            //    or type the credentials themselves. This is the core PAM value:
-            //    access without credential exposure.
-            if (db_type === 'mysql' && creds.db) {
-              const { username: dbUser, password: dbPass } = creds.db
-
-              // Wait for bash prompt, then fire the mysql command.
-              // We use --password= inline so it's never echoed in the PTY.
-              // The operator sees the mysql> prompt as their first output.
-              setTimeout(() => {
-                // --password= with no space avoids the "password on command line
-                // is insecure" warning being visible in the terminal
-                stream.write(`mysql -u ${dbUser} -p'${dbPass}'\r`)
-
-                // Immediately overwrite the password string in memory
-                ;(creds.db as any).password = ''
-              }, 800)
-
-            } else if (db_type === 'mongodb' && creds.db) {
-              const { username: dbUser, password: dbPass } = creds.db
-
-              setTimeout(() => {
-                stream.write(`mongosh -u ${dbUser} -p '${dbPass}' --authenticationDatabase admin\r`)
-                ;(creds.db as any).password = ''
-              }, 800)
+            const entry: TunnelEntry = {
+              conn,
+              stream,
+              ready:       false,
+              buffer:      [],
+              commandSent: false,
             }
+            tunnels.set(sessionId, entry)
+
+            const handleChunk = (chunk: Buffer) => {
+              const text = chunk.toString()
+
+              if (entry.ready) {
+                entry.onData?.(text)
+                return
+              }
+
+              entry.buffer.push(text)
+              const accumulated = entry.buffer.join('')
+
+              // Success — DB prompt detected
+              if (readyPattern && readyPattern.test(accumulated)) {
+                entry.ready  = true
+                entry.buffer = []
+                const match  = accumulated.match(readyPattern)
+                const prompt = match ? match[0].trimStart() : ''
+                setTimeout(() => {
+                  entry.onData?.(CLEAR_SCREEN + prompt)
+                }, 50)
+                return
+              }
+
+              // Fallback — bash prompt returned after command = DB login failed
+              if (entry.commandSent && /\$\s*$/.test(accumulated)) {
+                entry.ready  = true
+                entry.buffer = []
+                setTimeout(() => {
+                  entry.onData?.(
+                    CLEAR_SCREEN +
+                    '\x1b[31m[SecureGate] Database login failed — check credentials.\x1b[0m\r\n'
+                  )
+                }, 50)
+              }
+            }
+
+            stream.on('data',        handleChunk)
+            stream.stderr.on('data', handleChunk)
+            stream.on('close',       () => tunnelService.closeTunnel(sessionId))
+
+            setTimeout(() => {
+              if (db_type === 'mysql' && creds.db) {
+                const { username: dbUser, password: dbPass } = creds.db
+                stream.write(`stty -echo; mysql -u ${dbUser} -p'${dbPass}'; stty echo\r`)
+                entry.commandSent = true
+                ;(creds.db as any).password = ''
+              } else if (db_type === 'mongodb' && creds.db) {
+                const { username: dbUser, password: dbPass } = creds.db
+                stream.write(`stty -echo; mongosh -u ${dbUser} -p '${dbPass}' --authenticationDatabase admin; stty echo\r`)
+                entry.commandSent = true
+                ;(creds.db as any).password = ''
+              } else {
+                entry.ready  = true
+                entry.buffer = []
+              }
+              connectConfig.privateKey = ''
+            }, 800)
 
             resolve()
           }
@@ -107,23 +151,15 @@ export const tunnelService: ITunnelService = {
       })
 
       conn.on('error', reject)
-
-      conn.connect({
-        host:         hostname,
-        port:         port ?? 22,
-        username:     creds.ssh.username,
-        password:     creds.ssh.password,
-        readyTimeout: 10000,
-      })
-
-      // Overwrite SSH plaintext immediately after connect() call
-      ;(creds.ssh as any).password = ''
-      ;(creds.ssh as any).username = ''
+      conn.connect(connectConfig)
     })
   },
 
   write(sessionId: string, data: string): void {
-    tunnels.get(sessionId)?.stream.write(data)
+    const entry = tunnels.get(sessionId)
+    if (entry?.ready) {
+      entry.stream.write(data)
+    }
   },
 
   resize(sessionId: string, cols: number, rows: number): void {
@@ -132,9 +168,7 @@ export const tunnelService: ITunnelService = {
 
   onData(sessionId: string, handler: (data: string) => void): void {
     const entry = tunnels.get(sessionId)
-    if (entry) {
-      entry.onData = handler
-    }
+    if (entry) entry.onData = handler
   },
 
   closeTunnel(sessionId: string): void {
@@ -144,7 +178,7 @@ export const tunnelService: ITunnelService = {
       entry.stream.close()
       entry.conn.end()
     } catch {
-      // Suppress errors on already-closed connections
+      // suppress
     } finally {
       tunnels.delete(sessionId)
     }

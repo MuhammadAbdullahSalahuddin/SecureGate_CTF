@@ -16,7 +16,13 @@ async function seedVault() {
   const creds = {
     ssh: {
       username: 'pamuser',
-      password: '1234Admin',
+      privateKey:`-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACDIa48McIs3yqOt4x14HXj5sB6m8yFQ6n/PXTiv6NzviAAAAJjZE48g2ROP
+IAAAAAtzc2gtZWQyNTUxOQAAACDIa48McIs3yqOt4x14HXj5sB6m8yFQ6n/PXTiv6NzviA
+AAAEDKI4QKlQTsyIDMLtgDT/WyKDtD4iVJBvv57c8fq2Tep8hrjwxwizfKo63jHXgdePmw
+HqbzIVDqf89dOK/o3O+IAAAAFHJvb3RAaXAtMTcyLTMxLTIxLTQ2AQ==
+-----END OPENSSH PRIVATE KEY-----`,
     },
     db: {
       username: 'root',
