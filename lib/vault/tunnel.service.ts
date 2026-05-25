@@ -89,7 +89,7 @@ export const tunnelService: ITunnelService = {
 
             const handleChunk = (chunk: Buffer) => {
               const text = chunk.toString()
-
+	      console.log(`[tunnel][${sessionId}] ready=${entry.ready} chunk:`, JSON.stringify(text))  // ← ADD THIS
               if (entry.ready) {
                 entry.onData?.(text)
                 return
@@ -102,10 +102,8 @@ export const tunnelService: ITunnelService = {
               if (readyPattern && readyPattern.test(accumulated)) {
                 entry.ready  = true
                 entry.buffer = []
-                const match  = accumulated.match(readyPattern)
-                const prompt = match ? match[0].trimStart() : ''
                 setTimeout(() => {
-                  entry.onData?.(CLEAR_SCREEN + prompt)
+                  entry.onData?.(CLEAR_SCREEN + `mysql> `)
                 }, 50)
                 return
               }
@@ -128,23 +126,24 @@ export const tunnelService: ITunnelService = {
             stream.on('close',       () => tunnelService.closeTunnel(sessionId))
 
             setTimeout(() => {
-              if (db_type === 'mysql' && creds.db) {
-                const { username: dbUser, password: dbPass } = creds.db
-                stream.write(`stty -echo; mysql -u ${dbUser} -p'${dbPass}'; stty echo\r`)
-                entry.commandSent = true
-                ;(creds.db as any).password = ''
-              } else if (db_type === 'mongodb' && creds.db) {
-                const { username: dbUser, password: dbPass } = creds.db
-                stream.write(`stty -echo; mongosh -u ${dbUser} -p '${dbPass}' --authenticationDatabase admin; stty echo\r`)
-                entry.commandSent = true
-                ;(creds.db as any).password = ''
-              } else {
-                entry.ready  = true
-                entry.buffer = []
-              }
-              connectConfig.privateKey = ''
-            }, 800)
-
+  		if (db_type === 'mysql' && creds.db) {
+    			const { username: dbUser, password: dbPass } = creds.db
+    			const cmd = `stty -echo; printf '\\033[?2004l'; mysql -u ${dbUser} -p'${dbPass}'; stty echo\r`
+    			console.log(`[tunnel] sending command:`, JSON.stringify(cmd))
+    			stream.write(cmd)
+    			entry.commandSent = true
+    			;(creds.db as any).password = ''
+  		} else if (db_type === 'mongodb' && creds.db) {
+    			const { username: dbUser, password: dbPass } = creds.db
+    			stream.write(`stty -echo; mongosh -u ${dbUser} -p '${dbPass}' --authenticationDatabase admin; stty echo\r`)
+    			entry.commandSent = true
+    			;(creds.db as any).password = ''
+  		} else {
+    			entry.ready  = true
+    			entry.buffer = []
+  }
+  			connectConfig.privateKey = ''
+		}, 800)
             resolve()
           }
         )

@@ -25,8 +25,8 @@ HqbzIVDqf89dOK/o3O+IAAAAFHJvb3RAaXAtMTcyLTMxLTIxLTQ2AQ==
 -----END OPENSSH PRIVATE KEY-----`,
     },
     db: {
-      username: 'root',
-      password: 'your_mysql_root_password', // ← change to real MySQL password
+      username: 'pamuser',
+      password: '1234Admin', // ← change to real MySQL password
     },
   }
 
