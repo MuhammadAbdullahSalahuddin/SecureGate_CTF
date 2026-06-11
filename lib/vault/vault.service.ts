@@ -29,8 +29,8 @@ export interface EncryptedBlob {
 export interface AssetCredentials {
   ssh: {
     username: string
-    privateKey?: string 
-    password: string
+    password?: string 
+    privateKey?: string
   }
   db?: {
     username: string

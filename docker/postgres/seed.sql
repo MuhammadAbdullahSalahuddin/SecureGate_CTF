@@ -18,7 +18,7 @@ INSERT INTO user_roles (user_id, role_id)
 
 INSERT INTO target_assets (id, name, hostname, port, db_type) VALUES 
 	('00000000-0000-0000-0000-000000000001',
-	'Corp MYSQL Server', '192.168.1.20', 22, 'mysql');
+	'Corp MYSQL Server', '172.31.21.46', 22, 'mysql');
 
 INSERT INTO access_policies (role_id, asset_id, max_session_seconds)
 	SELECT r.id, '00000000-0000-0000-0000-000000000001', 3600

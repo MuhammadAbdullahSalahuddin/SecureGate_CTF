@@ -60,6 +60,6 @@ export async function generateRefreshToken(userId: string) {
   return new SignJWT({ userId, type: "refresh" })
     .setProtectedHeader({ alg: "RS256" })
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime("1d")
     .sign(privateKey);
 }

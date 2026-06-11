@@ -128,7 +128,7 @@ export const tunnelService: ITunnelService = {
             setTimeout(() => {
   		if (db_type === 'mysql' && creds.db) {
     			const { username: dbUser, password: dbPass } = creds.db
-    			const cmd = `stty -echo; printf '\\033[?2004l'; mysql -u ${dbUser} -p'${dbPass}'; stty echo\r`
+    			const cmd = `mysql -u ${dbUser} -p'${dbPass}'\r`
     			console.log(`[tunnel] sending command:`, JSON.stringify(cmd))
     			stream.write(cmd)
     			entry.commandSent = true

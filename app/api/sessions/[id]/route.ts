@@ -4,17 +4,13 @@ import { redis } from "@/lib/redis";
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  // Only ADMIN can revoke sessions
   const auth = await requireRole(request, ["ADMIN"]);
   if (auth instanceof NextResponse) return auth;
 
-  const sessionId = params.id;
+  const { id: sessionId } = await params;
 
-  // Delete the session key from Redis
-  // The TTL poller in the WebSocket gateway will detect this within 30 seconds
-  // and automatically close the SSH tunnel + disconnect the browser
   const deleted = await redis.del(`session:${sessionId}`);
 
   if (deleted === 0) {

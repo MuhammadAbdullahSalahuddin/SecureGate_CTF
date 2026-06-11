@@ -56,7 +56,7 @@ export async function POST(request: Request) {
       httpOnly: true, // invisible to JavaScript — XSS protection
       secure: process.env.NODE_ENV === "production", // HTTPS only in prod
       sameSite: "strict", // blocks cross-site request forgery
-      maxAge: 60 * 60 * 24 * 7, // 7 days in seconds
+      maxAge: 60 * 60 * 24, // 7 days in seconds
       path: "/",
     });
 

@@ -5,12 +5,12 @@ import { pool } from "@/lib/db";
 // DELETE /api/admin/users/:id — delete a user
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireRole(request, ["ADMIN"]);
   if (auth instanceof NextResponse) return auth;
 
-  const { id } = params;
+  const { id } = await params;
 
   // Prevent admin from deleting themselves
   if (auth.userId === id) {
