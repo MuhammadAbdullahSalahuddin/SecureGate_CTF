@@ -1,9 +1,7 @@
 import { SignJWT, importPKCS8, importSPKI, jwtVerify, JWTPayload } from "jose";
 
 const formatPrivateKey = (key: string): string => {
-  // If it already has PEM headers, use as-is
   if (key.includes("-----BEGIN")) return key;
-  // Otherwise wrap the raw base64 body
   return `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----`;
 };
 
@@ -19,13 +17,9 @@ export async function generateAccessToken(
 ) {
   const secretKey = process.env.GUARDIAN_JWT_PRIVATE_KEY;
   if (!secretKey) {
-    throw new Error(
-      "Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.",
-    );
+    throw new Error("Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.");
   }
-
   const privateKey = await importPKCS8(formatPrivateKey(secretKey), "RS256");
-
   return new SignJWT({ userId, role, email })
     .setProtectedHeader({ alg: "RS256" })
     .setIssuedAt()
@@ -33,30 +27,45 @@ export async function generateAccessToken(
     .sign(privateKey);
 }
 
-// ADD THIS — you'll need it in every protected route
+// ─── VULNERABLE — CTF fork only ───────────────────────────────────────────
+// Reads the `alg` field straight out of the (unverified) JWT header and
+// branches on it. If the header says HS256, it treats the RSA PUBLIC KEY
+// bytes as an HMAC-SHA256 secret. Since the public key is exposed at
+// /.well-known/jwks.json, anyone can sign their own HS256 token with those
+// same bytes and pass verification.
 export async function verifyAccessToken(token: string) {
-  const publicKey = process.env.GUARDIAN_JWT_PUBLIC_KEY;
-  if (!publicKey) {
-    throw new Error(
-      "Critical Security Error: GUARDIAN_JWT_PUBLIC_KEY is missing.",
-    );
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    throw new Error("Malformed token");
   }
 
-  const key = await importSPKI(formatPublicKey(publicKey), "RS256");
+  const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+  const alg = header.alg ?? "RS256";
+
+  const publicKeyStr = process.env.GUARDIAN_JWT_PUBLIC_KEY;
+  if (!publicKeyStr) {
+    throw new Error("Critical Security Error: GUARDIAN_JWT_PUBLIC_KEY is missing.");
+  }
+
+  if (alg === "HS256") {
+    // Public key PEM string used verbatim as the HMAC secret
+    const secret = new TextEncoder().encode(formatPublicKey(publicKeyStr));
+    const { payload } = await jwtVerify(token, secret);
+    return payload;
+  }
+
+  // Normal path — legitimate RS256 tokens
+  const key = await importSPKI(formatPublicKey(publicKeyStr), "RS256");
   const { payload } = await jwtVerify(token, key);
-  return payload; // contains { userId, role, email }
+  return payload;
 }
 
 export async function generateRefreshToken(userId: string) {
   const secretKey = process.env.GUARDIAN_JWT_PRIVATE_KEY;
   if (!secretKey) {
-    throw new Error(
-      "Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.",
-    );
+    throw new Error("Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.");
   }
-
   const privateKey = await importPKCS8(formatPrivateKey(secretKey), "RS256");
-
   return new SignJWT({ userId, type: "refresh" })
     .setProtectedHeader({ alg: "RS256" })
     .setIssuedAt()
