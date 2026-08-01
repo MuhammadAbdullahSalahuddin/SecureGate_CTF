@@ -28,7 +28,7 @@ const DB_READY_PATTERNS: Record<string, RegExp> = {
 
 const CLEAR_SCREEN = '\x1b[2J\x1b[H'
 
-export const tunnelService: ITunnelService = {
+export const tunnelService: ITunnelService & {activeCount(): number} = {
 
   async openTunnel(
     sessionId: string,
@@ -181,5 +181,8 @@ export const tunnelService: ITunnelService = {
     } finally {
       tunnels.delete(sessionId)
     }
+  },
+  activeCount(): number {
+    return tunnels.size;
   },
 }

@@ -32,6 +32,18 @@ export async function POST(request: Request) {
       );
     }
 
+
+// in app/api/auth/login/route.ts, before the bcrypt.compare check
+    const attemptsKey = `login_attempts:${email}`;
+
+    const attempts = await redis.incr(attemptsKey);
+
+    if (attempts === 1) await redis.expire(attemptsKey, 300); // 5 min window
+
+    if (attempts > 8) {
+     return NextResponse.json({ message: "Too many attempts, try again shortly" }, { status: 429 });
+}
+
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
       return NextResponse.json(

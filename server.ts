@@ -99,7 +99,13 @@ async function handleConnection(socket: Socket) {
   console.log(
     `[Gateway] Session ${sessionId} — user ${userId} → asset ${assetId}`,
   );
-
+  const MAX_CONCURRENT_TUNNELS = 8;
+  if (tunnelService.activeCount() >= MAX_CONCURRENT_TUNNELS) {
+    console.warn(`[Gateway] At capacity (${MAX_CONCURRENT_TUNNELS}) — rejecting ${sessionId}`);
+    socket.emit("error", { code: 5003, message: "Server at capacity, please retry shortly" });
+    socket.disconnect(true);
+    return;
+  }
   try {
     // 3. Look up how long this session is allowed to last
     //    We need this to set the Redis session TTL
