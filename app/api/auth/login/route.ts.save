@@ -5,6 +5,8 @@ import { pool } from "@/lib/db"; // we'll create this next
 import {redis} from "@/lib/redis";
 import {recordMilestone} from "@/lib/ctf-audit";
 
+
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -53,14 +55,10 @@ export async function POST(request: Request) {
         { status: 401 },
       );
     }
+    setImmediate(()=> {
+      recordMilestone(user,email, "recon_first_login").
 
-    setImmediate(() => {
-  recordMilestone(user.email, "recon_first_login").catch(() => {});
-    });
 
-    //Ressting the attempt counter on success
-    await redis.del(attemptsKey); 
-   
     // Sign BOTH tokens
     const accessToken = await generateAccessToken(
       user.id.toString(),
