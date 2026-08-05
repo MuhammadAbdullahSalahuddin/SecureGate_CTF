@@ -127,12 +127,8 @@ export const tunnelService: ITunnelService & {activeCount(): number} = {
 
             setTimeout(() => {
   		if (db_type === 'mysql' && creds.db) {
-    			const { username: dbUser, password: dbPass } = creds.db
-    			const cmd = `mysql -u ${dbUser} -p'${dbPass}'\r`
-    			console.log(`[tunnel] sending command:`, JSON.stringify(cmd))
-    			stream.write(cmd)
-    			entry.commandSent = true
-    			;(creds.db as any).password = ''
+			entry.ready = true
+			entry.buffer = []
   		} else if (db_type === 'mongodb' && creds.db) {
     			const { username: dbUser, password: dbPass } = creds.db
     			stream.write(`stty -echo; mongosh -u ${dbUser} -p '${dbPass}' --authenticationDatabase admin; stty echo\r`)

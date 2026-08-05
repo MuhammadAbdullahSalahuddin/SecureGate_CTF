@@ -15,13 +15,13 @@ async function seedVault() {
   // never sees or types either set of credentials.
   const creds = {
     ssh: {
-      username: 'pamuser',
+      username: 'ubuntu',
       privateKey:`-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACDIa48McIs3yqOt4x14HXj5sB6m8yFQ6n/PXTiv6NzviAAAAJjZE48g2ROP
-IAAAAAtzc2gtZWQyNTUxOQAAACDIa48McIs3yqOt4x14HXj5sB6m8yFQ6n/PXTiv6NzviA
-AAAEDKI4QKlQTsyIDMLtgDT/WyKDtD4iVJBvv57c8fq2Tep8hrjwxwizfKo63jHXgdePmw
-HqbzIVDqf89dOK/o3O+IAAAAFHJvb3RAaXAtMTcyLTMxLTIxLTQ2AQ==
+QyNTUxOQAAACC4Er2HDoGCnNwvAUiMPyqFWpbxQp6nQ7gTvICeVSM8nwAAAJhojrmWaI65
+lgAAAAtzc2gtZWQyNTUxOQAAACC4Er2HDoGCnNwvAUiMPyqFWpbxQp6nQ7gTvICeVSM8nw
+AAAEBULUaL5r7MLSYsqS7AZyPzWtcXslzdXNk4gMTABsT5/rgSvYcOgYKc3C8BSIw/KoVa
+lvFCnqdDuBO8gJ5VIzyfAAAAE3VidW50dUBpcC0xMC0wLTEtMjEBAg==
 -----END OPENSSH PRIVATE KEY-----`,
     },
     db: {
