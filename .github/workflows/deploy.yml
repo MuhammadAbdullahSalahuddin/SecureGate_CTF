@@ -43,8 +43,8 @@ jobs:
         env:
           # --- Pull in GitHub Variables ---
           NODE_ENV: ${{ vars.NODE_ENV }}
-          POSTGRES_DB: ${{ vars.GUARDIAN_DB_HOST }}
-          POSTGRES_HOST: ${{ vars.GUARDIAN_DB_NAME }}
+          POSTGRES_DB: ${{ vars.GUARDIAN_DB_NAME }}
+          POSTGRES_HOST: ${{ vars.GUARDIAN_DB_HOST }}
           POSTGRES_PORT: ${{ vars.GUARDIAN_DB_PORT }}
           POSTGRES_USER: ${{ vars.GUARDIAN_DB_USER }}
           REDIS_HOST: ${{ vars.GUARDIAN_REDIS_HOST }}
@@ -59,33 +59,34 @@ jobs:
           REDIS_PASSWORD: ${{ secrets.GUARDIAN_REDIS_PASS }}
         with:
           host: ${{ vars.CTF_DOMAIN_NAME }}
-          username: ${{ vars.CTF_HOST_USERNAME}}
+          username: ${{ vars.CTF_HOST_USERNAME }}
           key: ${{ secrets.CTF_AWS_SSH }}
-          # Tell the SSH action to pass these specific envs to the script
+          # Pass environment variables cleanly into the remote shell session
           envs: NODE_ENV,POSTGRES_DB,POSTGRES_HOST,POSTGRES_PORT,POSTGRES_USER,REDIS_HOST,REDIS_PORT,DISCORD_WEBHOOK_URL,GUARDIAN_JWT_PRIVATE_KEY,GUARDIAN_JWT_PUBLIC_KEY,GUARDIAN_MASTER_KEY,POSTGRES_PASSWORD,REDIS_PASSWORD
           script: |
-            # 1. Navigate to the project (CHANGE THIS PATH TO MATCH YOUR EC2)
-            cd /home/SecureGate/
+            # 1. Navigate to the project directory on EC2
+            cd /home/ubuntu/SecureGate
 
-            # 2.Force the server to perfectly match GitHub (prevents git pull conflicts)
+            # 2. Force server code to match origin/main
             git fetch origin main
             git reset --hard origin/main
 
-            cat << 'EOF' > .env
-            NODE_ENV=${{ vars.NODE_ENV }}
-            POSTGRES_DB=${{ vars.GUARDIAN_DB_NAME }}
-            POSTGRES_HOST=${{ vars.GUARDIAN_DB_HOST }}
-            POSTGRES_PORT=${{ vars.GUARDIAN_DB_PORT }}
-            POSTGRES_USER=${{ vars.GUARDIAN_DB_USER }}
-            REDIS_HOST=${{ vars.GUARDIAN_REDIS_HOST }}
-            REDIS_PORT=${{ vars.GUARDIAN_REDIS_PORT }}
-            DISCORD_WEBHOOK_URL="${{ secrets.DISCORD_WEBHOOK_URL }}"
-            GUARDIAN_MASTER_KEY="${{ secrets.GUARDIAN_MASTER_KEY }}"
-            POSTGRES_PASSWORD="${{ secrets.GUARDIAN_DB_PASS }}"
-            REDIS_PASSWORD="${{ secrets.GUARDIAN_REDIS_PASS }}"
+            # 3. Safely generate .env file using shell variables
+            cat << EOF > .env
+            NODE_ENV="$NODE_ENV"
+            POSTGRES_DB="$POSTGRES_DB"
+            POSTGRES_HOST="$POSTGRES_HOST"
+            POSTGRES_PORT="$POSTGRES_PORT"
+            POSTGRES_USER="$POSTGRES_USER"
+            REDIS_HOST="$REDIS_HOST"
+            REDIS_PORT="$REDIS_PORT"
+            DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL"
+            GUARDIAN_MASTER_KEY="$GUARDIAN_MASTER_KEY"
+            POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+            REDIS_PASSWORD="$REDIS_PASSWORD"
+            GUARDIAN_JWT_PRIVATE_KEY="$GUARDIAN_JWT_PRIVATE_KEY"
+            GUARDIAN_JWT_PUBLIC_KEY="$GUARDIAN_JWT_PUBLIC_KEY"
             EOF
 
-            echo "GUARDIAN_JWT_PRIVATE_KEY=\"${{ secrets.GUARDIAN_JWT_PRIVATE_KEY }}\"" >> .env
-            echo "GUARDIAN_JWT_PUBLIC_KEY=\"${{ secrets.GUARDIAN_JWT_PUBLIC_KEY }}\"" >> .env
-
+            # 4. Zero-downtime rebuild & restart
             docker compose up -d --build
