@@ -65,29 +65,27 @@ jobs:
           envs: NODE_ENV,POSTGRES_DB,POSTGRES_HOST,POSTGRES_PORT,POSTGRES_USER,REDIS_HOST,REDIS_PORT,DISCORD_WEBHOOK_URL,GUARDIAN_JWT_PRIVATE_KEY,GUARDIAN_JWT_PUBLIC_KEY,GUARDIAN_MASTER_KEY,POSTGRES_PASSWORD,REDIS_PASSWORD
           script: |
             # 1. Navigate to the project (CHANGE THIS PATH TO MATCH YOUR EC2)
-            cd /home/ubuntu/SecureGate
+            cd /
 
-            # 2. Force the server to perfectly match GitHub (prevents git pull conflicts)
+            # 2.Force the server to perfectly match GitHub (prevents git pull conflicts)
             git fetch origin main
             git reset --hard origin/main
 
-            # 3. Dynamically generate the .env file directly on the server
-            # Use '>' for the first line to create/overwrite the file
-            echo "NODE_ENV=$NODE_ENV" > .env
+            cat << 'EOF' > .env
+            NODE_ENV=${{ vars.NODE_ENV }}
+            POSTGRES_DB=${{ vars.GUARDIAN_DB_NAME }}
+            POSTGRES_HOST=${{ vars.GUARDIAN_DB_HOST }}
+            POSTGRES_PORT=${{ vars.GUARDIAN_DB_PORT }}
+            POSTGRES_USER=${{ vars.GUARDIAN_DB_USER }}
+            REDIS_HOST=${{ vars.GUARDIAN_REDIS_HOST }}
+            REDIS_PORT=${{ vars.GUARDIAN_REDIS_PORT }}
+            DISCORD_WEBHOOK_URL="${{ secrets.DISCORD_WEBHOOK_URL }}"
+            GUARDIAN_MASTER_KEY="${{ secrets.GUARDIAN_MASTER_KEY }}"
+            POSTGRES_PASSWORD="${{ secrets.GUARDIAN_DB_PASS }}"
+            REDIS_PASSWORD="${{ secrets.GUARDIAN_REDIS_PASS }}"
+            EOF
 
-            # Use '>>' for the rest to append to the file
-            echo "POSTGRES_DB=$POSTGRES_DB" >> .env
-            echo "POSTGRES_HOST=$POSTGRES_HOST" >> .env
-            echo "POSTGRES_PORT=$POSTGRES_PORT" >> .env
-            echo "POSTGRES_USER=$POSTGRES_USER" >> .env
-            echo "REDIS_HOST=$REDIS_HOST" >> .env
-            echo "REDIS_PORT=$REDIS_PORT" >> .env
-            echo "DISCORD_WEBHOOK_URL=$DISCORD_WEBHOOK_URL" >> .env
-            echo "GUARDIAN_JWT_PRIVATE_KEY=$GUARDIAN_JWT_PRIVATE_KEY" >> .env
-            echo "GUARDIAN_JWT_PUBLIC_KEY=$GUARDIAN_JWT_PUBLIC_KEY" >> .env
-            echo "GUARDIAN_MASTER_KEY=$GUARDIAN_MASTER_KEY" >> .env
-            echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" >> .env
-            echo "REDIS_PASSWORD=$REDIS_PASSWORD" >> .env
+            echo "GUARDIAN_JWT_PRIVATE_KEY=\"${{ secrets.GUARDIAN_JWT_PRIVATE_KEY }}\"" >> .env
+            echo "GUARDIAN_JWT_PUBLIC_KEY=\"${{ secrets.GUARDIAN_JWT_PUBLIC_KEY }}\"" >> .env
 
-            # 4. Zero-Downtime Docker Deployment
             docker compose up -d --build
