@@ -67,36 +67,35 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            # 2. Collapse multiline RSA keys into single-line strings
-            JWT_PRIV_SINGLE=$(echo "$GUARDIAN_JWT_PRIVATE_KEY" | sed ':a;N;$!ba;s/\n/\\n/g')
-            JWT_PUB_SINGLE=$(echo "$GUARDIAN_JWT_PUBLIC_KEY" | sed ':a;N;$!ba;s/\n/\\n/g')
+            # 2. Use Python to write .env cleanly without shell escaping issues
+            python3 -c '
+            import os
 
-            # 3. Write .env cleanly
-            printf 'NODE_ENV="%s"\n' "$NODE_ENV" > .env
-            printf 'GUARDIAN_DB_HOST="%s"\n' "$GUARDIAN_DB_HOST" >> .env
-            printf 'GUARDIAN_DB_PORT="%s"\n' "$GUARDIAN_DB_PORT" >> .env
-            printf 'GUARDIAN_DB_NAME="%s"\n' "$GUARDIAN_DB_NAME" >> .env
-            printf 'GUARDIAN_DB_USER="%s"\n' "$GUARDIAN_DB_USER" >> .env
-            printf 'GUARDIAN_DB_PASS="%s"\n' "$GUARDIAN_DB_PASS" >> .env
-            printf 'GUARDIAN_REDIS_HOST="%s"\n' "$GUARDIAN_REDIS_HOST" >> .env
-            printf 'GUARDIAN_REDIS_PORT="%s"\n' "$GUARDIAN_REDIS_PORT" >> .env
-            printf 'GUARDIAN_REDIS_PASS="%s"\n' "$GUARDIAN_REDIS_PASS" >> .env
-            printf 'GUARDIAN_MONGO_URI="%s"\n' "$GUARDIAN_MONGO_URI" >> .env
-            printf 'GUARDIAN_MASTER_KEY="%s"\n' "$GUARDIAN_MASTER_KEY" >> .env
-            printf 'DISCORD_WEBHOOK_URL="%s"\n' "$DISCORD_WEBHOOK_URL" >> .env
-            printf 'GUARDIAN_JWT_PRIVATE_KEY="%s"\n' "$JWT_PRIV_SINGLE" >> .env
-            printf 'GUARDIAN_JWT_PUBLIC_KEY="%s"\n' "$JWT_PUB_SINGLE" >> .env
+            keys = [
+                "NODE_ENV", "GUARDIAN_DB_NAME", "GUARDIAN_DB_HOST", "GUARDIAN_DB_PORT",
+                "GUARDIAN_DB_USER", "GUARDIAN_DB_PASS", "GUARDIAN_REDIS_HOST", "GUARDIAN_REDIS_PORT",
+                "GUARDIAN_REDIS_PASS", "GUARDIAN_MONGO_URI", "GUARDIAN_MASTER_KEY", "DISCORD_WEBHOOK_URL",
+                "GUARDIAN_JWT_PRIVATE_KEY", "GUARDIAN_JWT_PUBLIC_KEY"
+            ]
 
-            # 4. Deploy containers
+            with open(".env", "w") as f:
+                for k in keys:
+                    v = os.environ.get(k, "")
+                    # Convert raw newlines to literal \n string
+                    v_clean = v.replace("\r\n", "\\n").replace("\n", "\\n")
+                    f.write(f"{k}=\"{v_clean}\"\n")
+            '
+
+            # 3. Bring up containers
             docker compose up -d
 
-            # 5. Build Next.js
+            # 4. Recompile Next.js inside container
             docker compose exec -T app npx next build
 
-            # 6. Restart app container
+            # 5. Restart app container
             docker compose restart app
 
-            # 7. Health check
+            # 6. Health check
             sleep 5
             docker compose exec -T app curl -sf http://localhost:3000 > /dev/null || \
               (echo "Deploy smoke check failed — app not responding" && exit 1)
