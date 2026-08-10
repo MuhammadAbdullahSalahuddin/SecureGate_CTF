@@ -94,6 +94,6 @@ jobs:
                         docker compose restart app
 
                         # 6. Health check
-                        sleep 5
+                        sleep 40
                         docker compose exec -T app curl -sf http://localhost:3000 > /dev/null || \
                           (echo "Deploy smoke check failed — app not responding" && exit 1)
