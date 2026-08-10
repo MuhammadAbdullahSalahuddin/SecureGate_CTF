@@ -1,5 +1,4 @@
 name: SecureGate CI/CD Pipeline
-
 on:
   push:
     branches:
@@ -26,7 +25,9 @@ jobs:
       - name: Test Next.js Build
         run: npx next build
         env:
-          # Dummy variables to satisfy Next.js build checks during CI
+          # Dummy variables to satisfy import-time checks during CI build only.
+          # This build output is discarded — the real build happens on the EC2
+          # in the deploy step below, using real secrets.
           GUARDIAN_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
           GUARDIAN_JWT_PUBLIC_KEY: "dummy"
           GUARDIAN_JWT_PRIVATE_KEY: "dummy"
@@ -35,58 +36,79 @@ jobs:
   # 2. THE "CD" PHASE (Deploys to your AWS EC2 instance)
   # ---------------------------------------------------
   deploy-to-ec2:
-    needs: build-and-test # Forces GitHub to wait for CI to pass
+    needs: build-and-test
     runs-on: ubuntu-latest
     steps:
       - name: Execute remote SSH commands
         uses: appleboy/ssh-action@v1.0.3
         env:
-          # --- Pull in GitHub Variables ---
+          # NOTE: these names must match exactly what lib/db.ts, lib/redis.ts,
+          # lib/auth.ts, and lib/vault/vault.service.ts read via process.env.
           NODE_ENV: ${{ vars.NODE_ENV }}
-          POSTGRES_DB: ${{ vars.GUARDIAN_DB_NAME }}
-          POSTGRES_HOST: ${{ vars.GUARDIAN_DB_HOST }}
-          POSTGRES_PORT: ${{ vars.GUARDIAN_DB_PORT }}
-          POSTGRES_USER: ${{ vars.GUARDIAN_DB_USER }}
-          REDIS_HOST: ${{ vars.GUARDIAN_REDIS_HOST }}
-          REDIS_PORT: ${{ vars.GUARDIAN_REDIS_PORT }}
-
-          # --- Pull in GitHub Secrets ---
+          GUARDIAN_DB_NAME: ${{ vars.GUARDIAN_DB_NAME }}
+          GUARDIAN_DB_HOST: ${{ vars.GUARDIAN_DB_HOST }}
+          GUARDIAN_DB_PORT: ${{ vars.GUARDIAN_DB_PORT }}
+          GUARDIAN_DB_USER: ${{ vars.GUARDIAN_DB_USER }}
+          GUARDIAN_REDIS_HOST: ${{ vars.GUARDIAN_REDIS_HOST }}
+          GUARDIAN_REDIS_PORT: ${{ vars.GUARDIAN_REDIS_PORT }}
+          GUARDIAN_MONGO_URI: ${{ secrets.GUARDIAN_MONGO_URI }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GUARDIAN_JWT_PRIVATE_KEY: ${{ secrets.GUARDIAN_JWT_PRIVATE_KEY }}
           GUARDIAN_JWT_PUBLIC_KEY: ${{ secrets.GUARDIAN_JWT_PUBLIC_KEY }}
           GUARDIAN_MASTER_KEY: ${{ secrets.GUARDIAN_MASTER_KEY }}
-          POSTGRES_PASSWORD: ${{ secrets.GUARDIAN_DB_PASS }}
-          REDIS_PASSWORD: ${{ secrets.GUARDIAN_REDIS_PASS }}
+          GUARDIAN_DB_PASS: ${{ secrets.GUARDIAN_DB_PASS }}
+          GUARDIAN_REDIS_PASS: ${{ secrets.GUARDIAN_REDIS_PASS }}
         with:
           host: ${{ vars.CTF_DOMAIN_NAME }}
           username: ${{ vars.CTF_HOST_USERNAME }}
           key: ${{ secrets.CTF_AWS_SSH }}
-          # Pass environment variables cleanly into the remote shell session
-          envs: NODE_ENV,POSTGRES_DB,POSTGRES_HOST,POSTGRES_PORT,POSTGRES_USER,REDIS_HOST,REDIS_PORT,DISCORD_WEBHOOK_URL,GUARDIAN_JWT_PRIVATE_KEY,GUARDIAN_JWT_PUBLIC_KEY,GUARDIAN_MASTER_KEY,POSTGRES_PASSWORD,REDIS_PASSWORD
+          envs: NODE_ENV,GUARDIAN_DB_NAME,GUARDIAN_DB_HOST,GUARDIAN_DB_PORT,GUARDIAN_DB_USER,GUARDIAN_REDIS_HOST,GUARDIAN_REDIS_PORT,GUARDIAN_MONGO_URI,DISCORD_WEBHOOK_URL,GUARDIAN_JWT_PRIVATE_KEY,GUARDIAN_JWT_PUBLIC_KEY,GUARDIAN_MASTER_KEY,GUARDIAN_DB_PASS,GUARDIAN_REDIS_PASS
           script: |
-            # 1. Navigate to the project directory on EC2
+            set -e
             cd /home/ubuntu/SecureGate
 
-            # 2. Force server code to match origin/main
+            # Sync EC2 code with GitHub main — this OVERWRITES any uncommitted
+            # manual edits made directly on the box (e.g. via nano/psql).
+            # Anything you want to keep must be committed to git first.
             git fetch origin main
             git reset --hard origin/main
 
-            # 3. Safely generate .env file using shell variables
-            cat << EOF > .env
-            NODE_ENV="$NODE_ENV"
-            POSTGRES_DB="$POSTGRES_DB"
-            POSTGRES_HOST="$POSTGRES_HOST"
-            POSTGRES_PORT="$POSTGRES_PORT"
-            POSTGRES_USER="$POSTGRES_USER"
-            REDIS_HOST="$REDIS_HOST"
-            REDIS_PORT="$REDIS_PORT"
-            DISCORD_WEBHOOK_URL="$DISCORD_WEBHOOK_URL"
-            GUARDIAN_MASTER_KEY="$GUARDIAN_MASTER_KEY"
-            POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
-            REDIS_PASSWORD="$REDIS_PASSWORD"
-            GUARDIAN_JWT_PRIVATE_KEY="$GUARDIAN_JWT_PRIVATE_KEY"
-            GUARDIAN_JWT_PUBLIC_KEY="$GUARDIAN_JWT_PUBLIC_KEY"
-            EOF
+            # Write .env cleanly, one var per line, matching lib/*.ts exactly.
+            # NOTE: GUARDIAN_DB_HOST/GUARDIAN_DB_USER/GUARDIAN_DB_PASS and the
+            # Redis equivalents must match whatever docker-compose.yml has
+            # hardcoded for the postgres/redis containers (currently admin/admin),
+            # or the app will fail to authenticate against its own containers.
+            printf 'NODE_ENV="%s"\n' "$NODE_ENV" > .env
+            printf 'GUARDIAN_DB_HOST="%s"\n' "$GUARDIAN_DB_HOST" >> .env
+            printf 'GUARDIAN_DB_PORT="%s"\n' "$GUARDIAN_DB_PORT" >> .env
+            printf 'GUARDIAN_DB_NAME="%s"\n' "$GUARDIAN_DB_NAME" >> .env
+            printf 'GUARDIAN_DB_USER="%s"\n' "$GUARDIAN_DB_USER" >> .env
+            printf 'GUARDIAN_DB_PASS="%s"\n' "$GUARDIAN_DB_PASS" >> .env
+            printf 'GUARDIAN_REDIS_HOST="%s"\n' "$GUARDIAN_REDIS_HOST" >> .env
+            printf 'GUARDIAN_REDIS_PORT="%s"\n' "$GUARDIAN_REDIS_PORT" >> .env
+            printf 'GUARDIAN_REDIS_PASS="%s"\n' "$GUARDIAN_REDIS_PASS" >> .env
+            printf 'GUARDIAN_MONGO_URI="%s"\n' "$GUARDIAN_MONGO_URI" >> .env
+            printf 'GUARDIAN_MASTER_KEY="%s"\n' "$GUARDIAN_MASTER_KEY" >> .env
+            printf 'GUARDIAN_JWT_PRIVATE_KEY="%s"\n' "$GUARDIAN_JWT_PRIVATE_KEY" >> .env
+            printf 'GUARDIAN_JWT_PUBLIC_KEY="%s"\n' "$GUARDIAN_JWT_PUBLIC_KEY" >> .env
+            printf 'DISCORD_WEBHOOK_URL="%s"\n' "$DISCORD_WEBHOOK_URL" >> .env
 
-            # 4. Zero-downtime rebuild & restart
-            docker compose up -d --build
+            # Bring up containers (only rebuilds the image if Dockerfile/
+            # package.json changed — safe to run every deploy).
+            docker compose up -d
+
+            # REQUIRED: production mode needs an explicit `next build` to pick
+            # up new/changed routes. Restarting alone does NOT recompile,
+            # since docker-compose.yml bind-mounts the host source over the
+            # container (volumes: .:/app), overwriting whatever was baked
+            # into the image at build time.
+            docker compose exec -T app npx next build
+
+            # Restart so the server process picks up the freshly built .next
+            docker compose restart app
+
+            # Basic smoke check — fail the deploy loudly if the app didn't
+            # come back up, instead of finding out from a player report.
+            sleep 5
+            docker compose exec -T app curl -sf http://localhost:3000 > /dev/null || \
+              (echo "Deploy smoke check failed — app not responding" && exit 1)
