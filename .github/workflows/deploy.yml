@@ -63,15 +63,15 @@ jobs:
             set -e
             cd /home/ubuntu/SecureGate
 
-            # Sync EC2 code with GitHub main
+            # 1. Sync EC2 code with GitHub main
             git fetch origin main
             git reset --hard origin/main
 
-            # Flatten multiline RSA keys into single-line strings with '\n'
-            JWT_PRIV_FLAT=$(echo "$GUARDIAN_JWT_PRIVATE_KEY" | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
-            JWT_PUB_FLAT=$(echo "$GUARDIAN_JWT_PUBLIC_KEY" | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
+            # 2. Collapse multiline RSA keys into single-line strings
+            JWT_PRIV_SINGLE=$(echo "$GUARDIAN_JWT_PRIVATE_KEY" | sed ':a;N;$!ba;s/\n/\\n/g')
+            JWT_PUB_SINGLE=$(echo "$GUARDIAN_JWT_PUBLIC_KEY" | sed ':a;N;$!ba;s/\n/\\n/g')
 
-            # Write .env cleanly, one variable per line
+            # 3. Write .env cleanly
             printf 'NODE_ENV="%s"\n' "$NODE_ENV" > .env
             printf 'GUARDIAN_DB_HOST="%s"\n' "$GUARDIAN_DB_HOST" >> .env
             printf 'GUARDIAN_DB_PORT="%s"\n' "$GUARDIAN_DB_PORT" >> .env
@@ -84,19 +84,19 @@ jobs:
             printf 'GUARDIAN_MONGO_URI="%s"\n' "$GUARDIAN_MONGO_URI" >> .env
             printf 'GUARDIAN_MASTER_KEY="%s"\n' "$GUARDIAN_MASTER_KEY" >> .env
             printf 'DISCORD_WEBHOOK_URL="%s"\n' "$DISCORD_WEBHOOK_URL" >> .env
-            printf 'GUARDIAN_JWT_PRIVATE_KEY="%s"\n' "$JWT_PRIV_FLAT" >> .env
-            printf 'GUARDIAN_JWT_PUBLIC_KEY="%s"\n' "$JWT_PUB_FLAT" >> .env
+            printf 'GUARDIAN_JWT_PRIVATE_KEY="%s"\n' "$JWT_PRIV_SINGLE" >> .env
+            printf 'GUARDIAN_JWT_PUBLIC_KEY="%s"\n' "$JWT_PUB_SINGLE" >> .env
 
-            # Bring up containers
+            # 4. Deploy containers
             docker compose up -d
 
-            # Recompile Next.js inside container
+            # 5. Build Next.js
             docker compose exec -T app npx next build
 
-            # Restart app container
+            # 6. Restart app container
             docker compose restart app
 
-            # Smoke check
+            # 7. Health check
             sleep 5
             docker compose exec -T app curl -sf http://localhost:3000 > /dev/null || \
               (echo "Deploy smoke check failed — app not responding" && exit 1)
