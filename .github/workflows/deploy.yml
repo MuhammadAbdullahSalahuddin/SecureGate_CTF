@@ -1,4 +1,5 @@
 name: SecureGate CI/CD Pipeline
+
 on:
   push:
     branches:
@@ -25,9 +26,6 @@ jobs:
       - name: Test Next.js Build
         run: npx next build
         env:
-          # Dummy variables to satisfy import-time checks during CI build only.
-          # This build output is discarded — the real build happens on the EC2
-          # in the deploy step below, using real secrets.
           GUARDIAN_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
           GUARDIAN_JWT_PUBLIC_KEY: "dummy"
           GUARDIAN_JWT_PRIVATE_KEY: "dummy"
@@ -42,8 +40,6 @@ jobs:
       - name: Execute remote SSH commands
         uses: appleboy/ssh-action@v1.0.3
         env:
-          # NOTE: these names must match exactly what lib/db.ts, lib/redis.ts,
-          # lib/auth.ts, and lib/vault/vault.service.ts read via process.env.
           NODE_ENV: ${{ vars.NODE_ENV }}
           GUARDIAN_DB_NAME: ${{ vars.GUARDIAN_DB_NAME }}
           GUARDIAN_DB_HOST: ${{ vars.GUARDIAN_DB_HOST }}
@@ -67,17 +63,15 @@ jobs:
             set -e
             cd /home/ubuntu/SecureGate
 
-            # Sync EC2 code with GitHub main — this OVERWRITES any uncommitted
-            # manual edits made directly on the box (e.g. via nano/psql).
-            # Anything you want to keep must be committed to git first.
+            # Sync EC2 code with GitHub main
             git fetch origin main
             git reset --hard origin/main
 
-            # Write .env cleanly, one var per line, matching lib/*.ts exactly.
-            # NOTE: GUARDIAN_DB_HOST/GUARDIAN_DB_USER/GUARDIAN_DB_PASS and the
-            # Redis equivalents must match whatever docker-compose.yml has
-            # hardcoded for the postgres/redis containers (currently admin/admin),
-            # or the app will fail to authenticate against its own containers.
+            # Flatten multiline RSA keys into single-line strings with '\n'
+            JWT_PRIV_FLAT=$(echo "$GUARDIAN_JWT_PRIVATE_KEY" | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
+            JWT_PUB_FLAT=$(echo "$GUARDIAN_JWT_PUBLIC_KEY" | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
+
+            # Write .env cleanly, one variable per line
             printf 'NODE_ENV="%s"\n' "$NODE_ENV" > .env
             printf 'GUARDIAN_DB_HOST="%s"\n' "$GUARDIAN_DB_HOST" >> .env
             printf 'GUARDIAN_DB_PORT="%s"\n' "$GUARDIAN_DB_PORT" >> .env
@@ -89,26 +83,20 @@ jobs:
             printf 'GUARDIAN_REDIS_PASS="%s"\n' "$GUARDIAN_REDIS_PASS" >> .env
             printf 'GUARDIAN_MONGO_URI="%s"\n' "$GUARDIAN_MONGO_URI" >> .env
             printf 'GUARDIAN_MASTER_KEY="%s"\n' "$GUARDIAN_MASTER_KEY" >> .env
-            printf 'GUARDIAN_JWT_PRIVATE_KEY="%s"\n' "$GUARDIAN_JWT_PRIVATE_KEY" >> .env
-            printf 'GUARDIAN_JWT_PUBLIC_KEY="%s"\n' "$GUARDIAN_JWT_PUBLIC_KEY" >> .env
             printf 'DISCORD_WEBHOOK_URL="%s"\n' "$DISCORD_WEBHOOK_URL" >> .env
+            printf 'GUARDIAN_JWT_PRIVATE_KEY="%s"\n' "$JWT_PRIV_FLAT" >> .env
+            printf 'GUARDIAN_JWT_PUBLIC_KEY="%s"\n' "$JWT_PUB_FLAT" >> .env
 
-            # Bring up containers (only rebuilds the image if Dockerfile/
-            # package.json changed — safe to run every deploy).
+            # Bring up containers
             docker compose up -d
 
-            # REQUIRED: production mode needs an explicit `next build` to pick
-            # up new/changed routes. Restarting alone does NOT recompile,
-            # since docker-compose.yml bind-mounts the host source over the
-            # container (volumes: .:/app), overwriting whatever was baked
-            # into the image at build time.
+            # Recompile Next.js inside container
             docker compose exec -T app npx next build
 
-            # Restart so the server process picks up the freshly built .next
+            # Restart app container
             docker compose restart app
 
-            # Basic smoke check — fail the deploy loudly if the app didn't
-            # come back up, instead of finding out from a player report.
+            # Smoke check
             sleep 5
             docker compose exec -T app curl -sf http://localhost:3000 > /dev/null || \
               (echo "Deploy smoke check failed — app not responding" && exit 1)
