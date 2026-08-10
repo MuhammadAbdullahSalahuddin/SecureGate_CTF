@@ -65,7 +65,7 @@ jobs:
           envs: NODE_ENV,POSTGRES_DB,POSTGRES_HOST,POSTGRES_PORT,POSTGRES_USER,REDIS_HOST,REDIS_PORT,DISCORD_WEBHOOK_URL,GUARDIAN_JWT_PRIVATE_KEY,GUARDIAN_JWT_PUBLIC_KEY,GUARDIAN_MASTER_KEY,POSTGRES_PASSWORD,REDIS_PASSWORD
           script: |
             # 1. Navigate to the project (CHANGE THIS PATH TO MATCH YOUR EC2)
-            cd /
+            cd /home/SecureGate/
 
             # 2.Force the server to perfectly match GitHub (prevents git pull conflicts)
             git fetch origin main
