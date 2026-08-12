@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRole } from "@/lib/rbac";
 import { getAuditDb } from "@/lib/mongo";
+import { recordSecurityEvent } from "@/lib/ctf-audit";
 
 export async function GET(
   request: NextRequest,
@@ -15,6 +16,14 @@ export async function GET(
   if (auth instanceof NextResponse) return auth;
 
   const { uid } = await params;
+  if (uid !== auth.userId) {
+    setImmediate(() =>
+      recordSecurityEvent("idor_detected", {
+        email: auth.email,
+        endpoint: request.url,
+      }).catch(() => {}),
+    );
+  }
   const db = await getAuditDb();
 
   // VULNERABLE: uid comes straight from the URL, never checked against
@@ -35,10 +44,14 @@ export async function GET(
           sessionId: { $first: "$sessionId" },
           assetId: { $first: "$assetId" },
           startedAt: {
-            $min: { $cond: [{ $eq: ["$type", "session_start"] }, "$timestamp", null] },
+            $min: {
+              $cond: [{ $eq: ["$type", "session_start"] }, "$timestamp", null],
+            },
           },
           endedAt: {
-            $max: { $cond: [{ $eq: ["$type", "session_end"] }, "$timestamp", null] },
+            $max: {
+              $cond: [{ $eq: ["$type", "session_end"] }, "$timestamp", null],
+            },
           },
         },
       },

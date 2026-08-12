@@ -40,7 +40,7 @@ next-env.d.ts
 private.pem
 public.pem
 
-
+.env
 AGENTS.md
 CLAUDE.md
 eslint.config.mjs
@@ -50,3 +50,4 @@ tsconfig.json
 next.config.ts
 >>>>>>> Stashed changes
 postcss.config.mjs
+

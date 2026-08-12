@@ -2,14 +2,14 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcrypt";
 import { generateAccessToken, generateRefreshToken } from "@/lib/auth";
 import { pool } from "@/lib/db"; // we'll create this next
-import {redis} from "@/lib/redis";
-import {recordMilestone} from "@/lib/ctf-audit";
+import { redis } from "@/lib/redis";
+import { recordMilestone } from "@/lib/ctf-audit";
+import { recordSecurityEvent } from "@/lib/ctf-audit";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { email, password } = body;
-
     if (!email || !password) {
       return NextResponse.json(
         { message: "Invalid credentials" },
@@ -34,8 +34,7 @@ export async function POST(request: Request) {
       );
     }
 
-
-// in app/api/auth/login/route.ts, before the bcrypt.compare check
+    // in app/api/auth/login/route.ts, before the bcrypt.compare check
     const attemptsKey = `login_attempts:${email}`;
 
     const attempts = await redis.incr(attemptsKey);
@@ -43,8 +42,19 @@ export async function POST(request: Request) {
     if (attempts === 1) await redis.expire(attemptsKey, 300); // 5 min window
 
     if (attempts > 8) {
-     return NextResponse.json({ message: "Too many attempts, try again shortly" }, { status: 429 });
-}
+      const ip = request.headers.get("x-real-ip") ?? undefined;
+      setImmediate(() =>
+        recordSecurityEvent("brute_force_lockout", {
+          email,
+          attempts,
+          ip,
+        }).catch(() => {}),
+      );
+      return NextResponse.json(
+        { message: "Too many attempts, try again shortly" },
+        { status: 429 },
+      );
+    }
 
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
@@ -55,12 +65,12 @@ export async function POST(request: Request) {
     }
 
     setImmediate(() => {
-  recordMilestone(user.email, "recon_first_login").catch(() => {});
+      recordMilestone(user.email, "recon_first_login").catch(() => {});
     });
 
     //Ressting the attempt counter on success
-    await redis.del(attemptsKey); 
-   
+    await redis.del(attemptsKey);
+
     // Sign BOTH tokens
     const accessToken = await generateAccessToken(
       user.id.toString(),

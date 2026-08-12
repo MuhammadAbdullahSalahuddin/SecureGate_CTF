@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import bcrypt from "bcrypt";
+import { recordSecurityEvent } from "@/lib/ctf-audit";
 
 // PUBLIC registration endpoint — intentionally unlinked from any frontend page.
 // Only discoverable via directory/endpoint fuzzing against /api/*.
@@ -33,10 +34,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const existing = await pool.query(
-    `SELECT id FROM users WHERE email = $1`,
-    [email],
-  );
+  const existing = await pool.query(`SELECT id FROM users WHERE email = $1`, [
+    email,
+  ]);
   if (existing.rows.length > 0) {
     return NextResponse.json(
       { message: "Email already registered" },
@@ -54,6 +54,14 @@ export async function POST(request: NextRequest) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    if (finalRole === "ADMIN") {
+      setImmediate(() =>
+        recordSecurityEvent("mass_assignment_detected", {
+          email,
+          endpoint: "/api/register",
+        }).catch(() => {}),
+      );
+    }
 
     const userResult = await client.query(
       `INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id`,
