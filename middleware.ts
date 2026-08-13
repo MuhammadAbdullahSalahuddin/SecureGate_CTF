@@ -1,40 +1,41 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { jwtVerify, importSPKI } from 'jose'
+import { NextRequest, NextResponse } from "next/server";
+import { jwtVerify, importSPKI } from "jose";
 
 const formatPublicKey = (key: string): string => {
-  if (key.includes('-----BEGIN')) return key
-  return `-----BEGIN PUBLIC KEY-----\n${key}\n-----END PUBLIC KEY-----`
-}
+  const unescaped = key.replace(/\\n/g, "\n");
+  if (unescaped.includes("-----BEGIN")) return unescaped;
+  return `-----BEGIN PUBLIC KEY-----\n${unescaped}\n-----END PUBLIC KEY-----`;
+};
 
 export async function middleware(request: NextRequest) {
   // 1. Check for the refreshToken cookie
   // As per Security Rule 3, this httpOnly cookie proves the user has an active session
-  const refreshToken = request.cookies.get('refreshToken')?.value
+  const refreshToken = request.cookies.get("refreshToken")?.value;
 
   if (!refreshToken) {
-    return NextResponse.redirect(new URL('/login', request.url))
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   // 2. Verify the refresh token signature at the edge
   try {
-    const publicKeyStr = process.env.GUARDIAN_JWT_PUBLIC_KEY ?? ''
-    const formattedKey = formatPublicKey(publicKeyStr)
-    
+    const publicKeyStr = process.env.GUARDIAN_JWT_PUBLIC_KEY ?? "";
+    const formattedKey = formatPublicKey(publicKeyStr);
+
     // Import the RS256 public key for edge runtime
-    const publicKey = await importSPKI(formattedKey, 'RS256')
+    const publicKey = await importSPKI(formattedKey, "RS256");
 
     // Verify the token. If it was tampered with, this throws an error.
-    await jwtVerify(refreshToken, publicKey)
+    await jwtVerify(refreshToken, publicKey);
 
-    return NextResponse.next()
+    return NextResponse.next();
   } catch (error) {
     // Token is invalid or expired
-    console.error('Middleware JWT Verification Failed:', error)
-    
+    console.error("Middleware JWT Verification Failed:", error);
+
     // Clear the broken cookie and force a re-login
-    const response = NextResponse.redirect(new URL('/login', request.url))
-    response.cookies.delete('refreshToken')
-    return response
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    response.cookies.delete("refreshToken");
+    return response;
   }
 }
 
@@ -51,6 +52,6 @@ export const config = {
      * - favicon.ico (favicon file)
      * - login (the login page itself)
      */
-    '/((?!api|_next/static|_next/image|__nextjs|favicon.ico|login).*)',
+    "/((?!api|_next/static|_next/image|__nextjs|favicon.ico|login).*)",
   ],
-}
+};

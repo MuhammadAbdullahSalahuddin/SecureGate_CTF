@@ -82,7 +82,8 @@ jobs:
             with open(".env", "w") as f:
                 for k in keys:
                     val = os.environ.get(k, "")
-                    f.write(f"{k}={val}\n")
+                    escaped = val.replace("\n", "\\n")
+                    f.write(f"{k}={escaped}\n")
             '
 
                         # 3. Bring up containers

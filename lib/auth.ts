@@ -1,13 +1,15 @@
 import { SignJWT, importPKCS8, importSPKI, jwtVerify, JWTPayload } from "jose";
 
 const formatPrivateKey = (key: string): string => {
-  if (key.includes("-----BEGIN")) return key;
-  return `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----`;
+  const unescaped = key.replace(/\\n/g, "\n");
+  if (unescaped.includes("-----BEGIN")) return unescaped;
+  return `-----BEGIN PRIVATE KEY-----\n${unescaped}\n-----END PRIVATE KEY-----`;
 };
 
 const formatPublicKey = (key: string): string => {
-  if (key.includes("-----BEGIN")) return key;
-  return `-----BEGIN PUBLIC KEY-----\n${key}\n-----END PUBLIC KEY-----`;
+  const unescaped = key.replace(/\\n/g, "\n");
+  if (unescaped.includes("-----BEGIN")) return unescaped;
+  return `-----BEGIN PUBLIC KEY-----\n${unescaped}\n-----END PUBLIC KEY-----`;
 };
 
 export async function generateAccessToken(
@@ -17,7 +19,9 @@ export async function generateAccessToken(
 ) {
   const secretKey = process.env.GUARDIAN_JWT_PRIVATE_KEY;
   if (!secretKey) {
-    throw new Error("Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.");
+    throw new Error(
+      "Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.",
+    );
   }
   const privateKey = await importPKCS8(formatPrivateKey(secretKey), "RS256");
   return new SignJWT({ userId, role, email })
@@ -39,12 +43,16 @@ export async function verifyAccessToken(token: string) {
     throw new Error("Malformed token");
   }
 
-  const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+  const header = JSON.parse(
+    Buffer.from(parts[0], "base64url").toString("utf8"),
+  );
   const alg = header.alg ?? "RS256";
 
   const publicKeyStr = process.env.GUARDIAN_JWT_PUBLIC_KEY;
   if (!publicKeyStr) {
-    throw new Error("Critical Security Error: GUARDIAN_JWT_PUBLIC_KEY is missing.");
+    throw new Error(
+      "Critical Security Error: GUARDIAN_JWT_PUBLIC_KEY is missing.",
+    );
   }
 
   if (alg === "HS256") {
@@ -63,7 +71,9 @@ export async function verifyAccessToken(token: string) {
 export async function generateRefreshToken(userId: string) {
   const secretKey = process.env.GUARDIAN_JWT_PRIVATE_KEY;
   if (!secretKey) {
-    throw new Error("Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.");
+    throw new Error(
+      "Critical Security Error: GUARDIAN_JWT_PRIVATE_KEY is missing.",
+    );
   }
   const privateKey = await importPKCS8(formatPrivateKey(secretKey), "RS256");
   return new SignJWT({ userId, type: "refresh" })
