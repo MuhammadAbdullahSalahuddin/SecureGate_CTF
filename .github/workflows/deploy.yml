@@ -82,7 +82,7 @@ jobs:
             with open(".env", "w") as f:
                 for k in keys:
                     val = os.environ.get(k, "")
-                    f.write(f"{k}={json.dumps(val)}\n")
+                    f.write(f"{k}={val}\n")
             '
 
                         # 3. Bring up containers
