@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "@/lib/auth";
 import { recordSecurityEvent } from "@/lib/ctf-audit";
-import pool;
+import { pool } from "@/lib/db";
 // The three roles in SecureGate
 export type Role = "ADMIN" | "OPERATOR" | "AUDITOR";
 
