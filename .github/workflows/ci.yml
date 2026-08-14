@@ -1,0 +1,28 @@
+name: SecureGate CI Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Test Next.js Build
+        run: npx next build
+        env:
+          GUARDIAN_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+          GUARDIAN_JWT_PUBLIC_KEY: "dummy"
+          GUARDIAN_JWT_PRIVATE_KEY: "dummy"

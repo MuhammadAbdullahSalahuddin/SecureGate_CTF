@@ -1,0 +1,79 @@
+name: SecureGate CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-to-ec2:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute remote SSH commands
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          NODE_ENV: ${{ vars.NODE_ENV }}
+          GUARDIAN_DB_NAME: ${{ vars.GUARDIAN_DB_NAME }}
+          GUARDIAN_DB_HOST: ${{ vars.GUARDIAN_DB_HOST }}
+          GUARDIAN_DB_PORT: ${{ vars.GUARDIAN_DB_PORT }}
+          GUARDIAN_DB_USER: ${{ vars.GUARDIAN_DB_USER }}
+          GUARDIAN_REDIS_HOST: ${{ vars.GUARDIAN_REDIS_HOST }}
+          GUARDIAN_REDIS_PORT: ${{ vars.GUARDIAN_REDIS_PORT }}
+          GUARDIAN_MONGO_URI: ${{ secrets.GUARDIAN_MONGO_URI }}
+          DISCORD_SOLVES_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_SOURCE_URL }}
+          DISCORD_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_ALERT_URL }}
+          GUARDIAN_JWT_PRIVATE_KEY: ${{ secrets.GUARDIAN_JWT_PRIVATE_KEY }}
+          GUARDIAN_JWT_PUBLIC_KEY: ${{ secrets.GUARDIAN_JWT_PUBLIC_KEY }}
+          GUARDIAN_MASTER_KEY: ${{ secrets.GUARDIAN_MASTER_KEY }}
+          GUARDIAN_DB_PASS: ${{ secrets.GUARDIAN_DB_PASS }}
+          GUARDIAN_REDIS_PASS: ${{ secrets.GUARDIAN_REDIS_PASS }}
+        with:
+          host: ${{ vars.CTF_DOMAIN_NAME }}
+          username: ${{ vars.CTF_HOST_USERNAME }}
+          key: ${{ secrets.CTF_AWS_SSH }}
+          envs: NODE_ENV,GUARDIAN_DB_NAME,GUARDIAN_DB_HOST,GUARDIAN_DB_PORT,GUARDIAN_DB_USER,GUARDIAN_REDIS_HOST,GUARDIAN_REDIS_PORT,GUARDIAN_MONGO_URI,DISCORD_SOLVES_WEBHOOK_URL,DISCORD_ALERTS_WEBHOOK_URL,GUARDIAN_JWT_PRIVATE_KEY,GUARDIAN_JWT_PUBLIC_KEY,GUARDIAN_MASTER_KEY,GUARDIAN_DB_PASS,GUARDIAN_REDIS_PASS
+          script: |
+            set -e
+            cd /home/ubuntu/SecureGate
+
+            # 1. Sync EC2 code with GitHub main
+            git fetch origin main
+            git reset --hard origin/main
+
+            # 2. Write .env using python to guarantee single-line escaping
+            python3 -c '
+            import os, json
+
+            keys = [
+                "NODE_ENV", "GUARDIAN_DB_NAME", "GUARDIAN_DB_HOST", "GUARDIAN_DB_PORT",
+                "GUARDIAN_DB_USER", "GUARDIAN_DB_PASS", "GUARDIAN_REDIS_HOST", "GUARDIAN_REDIS_PORT",
+                "GUARDIAN_REDIS_PASS", "GUARDIAN_MONGO_URI", "GUARDIAN_MASTER_KEY", "DISCORD_SOLVES_WEBHOOK_URL",
+                "DISCORD_ALERTS_WEBHOOK_URL", "GUARDIAN_JWT_PRIVATE_KEY", "GUARDIAN_JWT_PUBLIC_KEY"
+            ]
+
+            with open(".env", "w") as f:
+                for k in keys:
+                    val = os.environ.get(k, "")
+                    escaped = val.replace("\n", "\\n")
+                    f.write(f"{k}={escaped}\n")
+            '
+
+            # 3. Bring up containers
+            docker compose up -d
+
+            # 4. Recompile Next.js inside container
+            docker compose exec -T app npx next build
+
+            # 5. Restart app container
+            docker compose restart app
+
+            # 6. Health check
+            echo "Waiting for app to come online..."
+            sleep 10
+            curl -sf http://localhost:3000 > /dev/null || ( \
+            echo "=== DEPLOYMENT FAILED: APP LOGS ===" && \
+            docker compose logs --tail=50 app && \
+            echo "=== CONTAINER STATUS ===" && \
+            docker compose ps && \
+            exit 1 \
+            )
