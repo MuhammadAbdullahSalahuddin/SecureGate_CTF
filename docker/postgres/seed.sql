@@ -1,7 +1,7 @@
 INSERT INTO users (id, email, password_hash) VALUES
 	('c08f30e8-26f3-44c9-aa4a-484c11e9d0c7', 'admin@securegate.local', '$2b$12$xLuf10.GQDhabdZnNoeLrueNLYbMwOv/FSgqC16Qc1kIdG2oRkyJG'),
-	('operator@securegate.local', '$2b$12$q2Ta26aeosnD1.qUtYOAFeHtT6IkZ4fKUn5glnnNcjm/s.FPrP6wy'),
-	('auditor@securegate.local', '$2b$12$nuUg7XcXFaxXzDPTZeSZfuNG1PBnpea6f.0lStv6GLZCRqNN39Py2');
+	('a39e3f4b-d70e-4fe1-9931-e586707184df','operator@securegate.local', '$2b$12$q2Ta26aeosnD1.qUtYOAFeHtT6IkZ4fKUn5glnnNcjm/s.FPrP6wy'),
+	('80ad7a80-4931-4714-a4aa-9db1c7076f9c','auditor@securegate.local', '$2b$12$nuUg7XcXFaxXzDPTZeSZfuNG1PBnpea6f.0lStv6GLZCRqNN39Py2');
 INSERT INTO user_roles (user_id, role_id)
 	SELECT u.id, r.id FROM users u, roles r
 	WHERE u.email = 'admin@securegate.local' AND r.name = 'ADMIN';
