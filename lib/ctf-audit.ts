@@ -61,6 +61,7 @@ export async function recordSecurityEvent(
   type: SecurityEventType,
   meta: Record<string, unknown> = {},
 ) {
+  console.log("[ctf-audit] recordSecurityEvent called:", type, meta); // TEMP DEBUG
   const db = await getAuditDb();
   await db
     .collection("ctf_security_events")
