@@ -16,7 +16,10 @@ interface NotifyOptions {
 export async function notifyDiscord(message: string, opts: NotifyOptions = {}) {
   const { channel = "alerts", color, mention = false } = opts;
   const url = WEBHOOK_URLS[channel];
-  if (!url) return;
+  if (!url) {
+    console.log("[Discord] no webhook URL configured for channel:", channel);
+    return;
+  }
 
   const body = color
     ? {
@@ -26,11 +29,15 @@ export async function notifyDiscord(message: string, opts: NotifyOptions = {}) {
     : { content: mention ? `@here ${message}` : message };
 
   try {
-    await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "<no body>");
+      console.error("[Discord] webhook rejected:", res.status, text);
+    }
   } catch (err) {
     console.error("[Discord] webhook failed:", err);
   }
