@@ -61,10 +61,10 @@ jobs:
             '
 
             # 3. Bring up containers
-            docker compose up -d
+            docker compose run --rm -e NODE_OPTIONS="--max-old-space-size=768" app npx next build
 
             # 4. Recompile Next.js inside container
-            docker compose exec -T app npx next build
+            docker compose up -d
 
             # 5. Restart app container
             docker compose restart app
