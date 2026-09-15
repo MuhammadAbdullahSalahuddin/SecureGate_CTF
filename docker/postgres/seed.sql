@@ -23,6 +23,3 @@ INSERT INTO access_policies (role_id, asset_id, max_session_seconds)
 	SELECT r.id, '00000000-0000-0000-0000-000000000001', 3600
 	FROM roles r WHERE r.name = 'ADMIN';
 
-INSERT INTO access_policies (role_id, asset_id, max_session_seconds)
-	SELECT r.id, '00000000-0000-0000-0000-000000000001', 1800
-	FROM roles r WHERE r.name = 'OPERATOR';
