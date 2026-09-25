@@ -1,5 +1,7 @@
 import { SignJWT, importPKCS8, importSPKI, jwtVerify, JWTPayload } from "jose";
 
+
+
 const formatPrivateKey = (key: string): string => {
   const unescaped = key.replace(/\\n/g, "\n");
   if (unescaped.includes("-----BEGIN")) return unescaped;
@@ -25,11 +27,14 @@ export async function generateAccessToken(
   }
   const privateKey = await importPKCS8(formatPrivateKey(secretKey), "RS256");
   return new SignJWT({ userId, role, email })
-    .setProtectedHeader({ alg: "RS256" })
+    .setProtectedHeader({ alg: "RS256" , kid:"securegate-2025"})
     .setIssuedAt()
     .setExpirationTime("15m")
     .sign(privateKey);
 }
+
+
+
 
 // ─── VULNERABLE — CTF fork only ───────────────────────────────────────────
 // Reads the `alg` field straight out of the (unverified) JWT header and

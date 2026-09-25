@@ -5,7 +5,7 @@ import { pool } from "@/lib/db"; // we'll create this next
 import { redis } from "@/lib/redis";
 import { recordMilestone } from "@/lib/ctf-audit";
 import { recordSecurityEvent } from "@/lib/ctf-audit";
-
+import { getAuditDb } from "@/lib/mongo";
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -78,7 +78,24 @@ export async function POST(request: Request) {
       user.email,
     );
     const refreshToken = await generateRefreshToken(user.id.toString());
+    setImmediate(async () => {
 
+  if (user.role !=="ADMIN" )return;
+  try {
+    const db = await getAuditDb();
+    await db.collection("audit_events").insertOne({
+      sessionId: `login_${user.id}_${Date.now()}`,
+      userId: user.id,
+      assetId: null,
+      type: "auth_meta",
+      data: JSON.stringify({ alg: "RS256", kid: "securegate-2025", issuedVia: "jwks" }),
+      seqNum: 0,
+      timestamp: new Date(),
+    });
+  } 
+  catch {}
+}
+);
     // Build the response
     const response = NextResponse.json({ accessToken });
 
