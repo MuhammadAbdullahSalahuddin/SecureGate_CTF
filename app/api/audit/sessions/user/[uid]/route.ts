@@ -58,6 +58,13 @@ export async function GET(
       { $sort: { startedAt: -1 } },
     ])
     .toArray();
-
-  return NextResponse.json({ sessions, userId: uid });
+    
+    const authEvents = await db
+  .collection("audit_events")
+  .find({ userId: uid, type: "auth_meta" })
+  .sort({ timestamp: -1 })
+  .limit(5)
+  .toArray();
+  return NextResponse.json({ sessions, userId: uid, authEvents });
+  
 }
